@@ -31,8 +31,8 @@ import { ParametersDrawer } from './chat/ParametersDrawer'
 import { RightPanel } from './chat/RightPanel'
 
 const NO_MESSAGES: ChatMessage[] = []
-/** Closer to the bottom than this counts as "at the bottom": following the stream. */
-const FOLLOW_SLACK_PX = 80
+/** scrollTop may be fractional while the scroll height is rounded. */
+const BOTTOM_EPSILON_PX = 2
 
 /**
  * Whether another thread holds the engine. There is one live overlay and one request in flight; a
@@ -83,7 +83,7 @@ export function ChatView() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
-  const jumpUntil = useRef(0)
+  const lastScrollTop = useRef(0)
   const [atBottom, setAtBottom] = useState(true)
 
   // The latest of what the transcript's actions read — so the actions themselves never change and
@@ -103,6 +103,7 @@ export function ChatView() {
     const element = scrollRef.current
     if (!element || !followRef.current) return
     element.scrollTop = element.scrollHeight
+    lastScrollTop.current = element.scrollTop
   }, [conversation?.id, messages, activeStream?.content, activeStream?.reasoning])
 
   // Things that change height without changing the messages — a composer growing, a reply's final
@@ -111,7 +112,9 @@ export function ChatView() {
     const element = scrollRef.current
     if (!element) return
     const observer = new ResizeObserver(() => {
-      if (followRef.current) element.scrollTop = element.scrollHeight
+      if (!followRef.current) return
+      element.scrollTop = element.scrollHeight
+      lastScrollTop.current = element.scrollTop
     })
     observer.observe(element)
     if (element.firstElementChild) observer.observe(element.firstElementChild)
@@ -121,22 +124,21 @@ export function ChatView() {
   const onScroll = () => {
     const element = scrollRef.current
     if (!element) return
-    const near = element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_SLACK_PX
-    setAtBottom(near)
-    // A smooth jump to the end passes through positions that are not the end; it still follows.
-    if (performance.now() < jumpUntil.current) {
-      followRef.current = true
-      return
-    }
-    followRef.current = near
+    const delta = element.scrollTop - lastScrollTop.current
+    lastScrollTop.current = element.scrollTop
+    const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_EPSILON_PX
+    if (!bottom || delta < 0) followRef.current = false
+    else if (delta > 0) followRef.current = true
+    setAtBottom(bottom)
   }
 
   const jumpToBottom = () => {
     const element = scrollRef.current
     if (!element) return
     followRef.current = true
-    jumpUntil.current = performance.now() + 800
-    element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+    element.scrollTop = element.scrollHeight
+    lastScrollTop.current = element.scrollTop
+    setAtBottom(true)
   }
 
   const follow = useCallback(() => {
@@ -256,7 +258,12 @@ export function ChatView() {
         <ParametersDrawer />
 
         <div className="relative min-h-0 flex-1">
-          <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
+          <div ref={scrollRef} onScroll={onScroll} onWheelCapture={(event) => {
+            // Wheel input arrives before the scroll event, so the next token cannot undo it.
+            if (event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight) {
+              followRef.current = false
+            }
+          }} className="h-full overflow-y-auto">
             {empty ? (
               <EmptyHero conversation={conversation}>
                 <Composer conversation={conversation} variant="hero" onSend={follow} />

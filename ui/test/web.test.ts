@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { webEnabled, formatWebResult } from '../src/lib/web.ts'
+import { webEnabled, formatWebResult, firstPublicUrl, isWebTask, requestsBrowserAction } from '../src/lib/web.ts'
 import { buildSystemPrompt } from '../src/lib/agent/protocol.ts'
 import { prepareCall, outputLimits, type ToolContext } from '../src/lib/agent/tools.ts'
 import { fakeWorkspace } from '../src/lib/agent/fakeWorkspace.ts'
@@ -58,4 +58,47 @@ test('tool evidence is bounded and identified as untrusted data', () => {
   const text = formatWebResult({ route: 'tor', sources: [{ title: 'Page', url: 'https://example.org/', text: 'x'.repeat(10000) }] }, 2000)
   assert.equal(text.length, 2000)
   assert.match(text, /untrusted evidence/)
+})
+
+test('website requests retain the hash route and explicit implementation stays in Code', () => {
+  const url = 'https://misakaoptions.com/#/store'
+  assert.equal(firstPublicUrl(`[ストア](${url}) の用途を調べて`), url)
+  assert.equal(isWebTask(`${url} このサイトの用途は何か 調べて`), true)
+  assert.equal(isWebTask(url), true)
+  assert.equal(isWebTask(`${url} は開かずにURLの構造だけ調べて`), false)
+  assert.equal(isWebTask(`Implement search for ${url}`), false)
+  assert.equal(firstPublicUrl('https://user:password@example.org'), undefined)
+})
+
+test('a website summary can read rendered text without pausing for browser approval', async () => {
+  const url = 'https://misakaoptions.com/#/store'
+  const request = `${url} このサイトの用途は何か　調べて`
+  assert.equal(requestsBrowserAction(request), false)
+  assert.equal(requestsBrowserAction('比較ボタンをクリックして'), true)
+  const prompt = buildSystemPrompt({ root: '', date: '2026-11-03', policy: 'read_only', web: true, webOnly: true, browser: true })
+  assert.doesNotMatch(prompt, /"name": "browser_click"/)
+  const result = { route: 'tor' as const, sources: [{
+    title: 'Store', url, text: 'Visible controls: example:0 Home\nRendered page text:\nBuy an access pass.',
+  }] }
+  const context: ToolContext = {
+    root: '', api: fakeWorkspace({}), policy: 'auto_edit', allowed: new Set(), limits: outputLimits(8192), webOnly: true,
+    web: { enabled: () => true, allowClicks: requestsBrowserAction(request), api: {
+      search: async () => result,
+      fetch: async () => result,
+      browser: {
+        open: async () => result,
+        read: async () => result,
+        preview: async () => { assert.fail('an unrequested click should never reach preview') },
+        click: async () => { assert.fail('an unrequested click should never run') },
+      },
+    } },
+  }
+  const click = await prepareCall({ name: 'browser_click', args: { control: 'example:0' } }, context)
+  assert.equal(click.kind, 'settled')
+  const read = await prepareCall({ name: 'browser_open', args: { url } }, context)
+  assert.equal(read.kind, 'run')
+  if (read.kind !== 'run') return
+  const evidence = await read.run(new AbortController().signal)
+  assert.match(evidence.output, /Buy an access pass/)
+  assert.doesNotMatch(evidence.output, /example:0/)
 })

@@ -99,3 +99,15 @@ async fn the_backend_that_can_read_an_artifact_is_not_gated() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_q36_artifact_is_rejected_before_starting_base0_serve() {
+    let models = models_dir();
+    std::fs::write(models.path().join("hybrid.palwart"), b"PALWQ361").unwrap();
+    let (state, _data) = studio(models.path(), BackendKind::Misaka).await;
+
+    let error = state.load("hybrid", None).await.unwrap_err();
+    assert!(matches!(error, Error::BadRequest { .. }), "{error}");
+    assert!(error.to_string().contains("PALWQ361"), "{error}");
+    assert!(error.to_string().contains("GGUF"), "{error}");
+}

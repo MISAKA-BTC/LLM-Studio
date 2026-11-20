@@ -13,7 +13,7 @@
 
 import { create } from 'zustand'
 import { api } from '../api'
-import { webEnabled } from '../web'
+import { firstPublicUrl, isWebTask, requestsBrowserAction, requestsSourceAnalysis, webEnabled, type BrowserApi } from '../web'
 import { hasRepeatedTail } from '../history'
 import type { Attachment, MessageMining, WorkspaceInfo } from '../types'
 import { chatModelId, streamReply, uid, useStudio } from '../../store/studio'
@@ -101,9 +101,9 @@ export async function startAgentRun(
   if (studio.streaming && studio.streaming.conversationId !== conversationId) {
     return back('info', 'Another thread is still answering. Stop it there, or wait, then send again.')
   }
-  const webChat = conversation.mode !== 'agent'
-  if (webChat && !webEnabled(conversation, studio.settings, studio.runtime?.backend)) return back('error', 'Web research requires Web access on, mining off in this thread, and a local model.')
-  if (!webChat && !conversation.workspace) {
+  const webRun = conversation.mode !== 'agent' || isWebTask(text)
+  if (webRun && !webEnabled(conversation, studio.settings, studio.runtime?.backend)) return back('error', 'Web research requires Web access on, mining off in this thread, and a local model.')
+  if (!webRun && !conversation.workspace) {
     useUi.getState().openWorkspacePicker(conversationId)
     return back('info', 'Choose the folder the agent works in, then send again.')
   }
@@ -111,7 +111,7 @@ export async function startAgentRun(
   if (!modelId) return back('error', 'No model is available. Download one from the Models tab.')
   if (studio.runtime?.model_id === modelId && studio.runtime.backend === 'gateway') return back('error', GATEWAY_EXPLAINED)
   const window = studio.runtime?.model_id === modelId ? studio.runtime.context_size : null
-  if (!webChat && contextTooSmall(window) && !contextWarned.has(`${modelId}:${window}`)) {
+  if (!webRun && contextTooSmall(window) && !contextWarned.has(`${modelId}:${window}`)) {
     contextWarned.add(`${modelId}:${window}`)
     studio.toast(
       'info',
@@ -123,7 +123,7 @@ export async function startAgentRun(
   // and its branch, for the system prompt.
   let info: Pick<WorkspaceInfo, 'root' | 'name' | 'branch' | 'is_git'> = { root: '', name: 'Web research', branch: null, is_git: false }
   try {
-    if (!webChat) info = await openWorkspace(conversation.workspace!, true)
+    if (!webRun) info = await openWorkspace(conversation.workspace!, true)
   } catch (error) {
     return back('error', `The folder ${conversation.workspace} cannot be opened: ${(error as Error).message}`)
   }
@@ -141,6 +141,20 @@ export async function startAgentRun(
   useAgent.setState({ run: { conversationId, status: 'running', step: 1 }, pendingApproval: null })
 
   try {
+    const allowClicks = webRun && requestsBrowserAction(text)
+    const managed = allowClicks && (await api.web.browser().catch(() => null))?.managed === true
+    if (!running()) return
+    const browser: BrowserApi | undefined = managed ? {
+      open: (url, signal) => api.web.session(conversationId, { action: 'open', url }, signal),
+      read: (signal) => api.web.session(conversationId, { action: 'read' }, signal),
+      preview: (control) => api.web.session(conversationId, { action: 'preview', control }),
+      click: (control, signal) => api.web.session(conversationId, { action: 'click', control }, signal),
+    } : undefined
+    const url = webRun && isWebTask(text) ? firstPublicUrl(text) : undefined
+    const inspectSource = requestsSourceAnalysis(text)
+    const find = inspectSource && url && /\.[cm]?js$/i.test(new URL(url).pathname)
+      ? /\bfunction[ \t]+[A-Za-z_$][\w$]*/.exec(text)?.[0]
+      : undefined
     const result = await runAgentLoop(
       {
         conversationId,
@@ -170,7 +184,7 @@ export async function startAgentRun(
             modelId: chatModelId(now, conversationId) ?? modelId,
             pinned,
             // Room for a whole file in one write_file; the context manager keeps the answer's share.
-            maxTokens: Math.min(Math.max(now.settings?.generation.max_tokens ?? 0, 4096), window ? Math.max(1024, Math.floor(window / 4)) : 4096),
+            maxTokens: webRun ? 1024 : Math.min(Math.max(now.settings?.generation.max_tokens ?? 0, 4096), window ? Math.max(1024, Math.floor(window / 4)) : 4096),
             stop: ['</tool_call>'],
             // A file being written is not a loop, however repetitive its code: the chat's check
             // runs only outside an open call.
@@ -180,24 +194,28 @@ export async function startAgentRun(
         systemPrompt: (thread) =>
           buildSystemPrompt({
             root: info.root,
-            webOnly: webChat,
+            webOnly: webRun,
+            browser: managed,
             web: webEnabled(thread, useStudio.getState().settings, useStudio.getState().runtime?.backend),
             name: info.name,
             branch: info.branch,
             isGit: info.is_git,
             os: useStudio.getState().system?.hardware.os ?? null,
             date: localDate(),
-            policy: thread.approval ?? 'auto_edit',
+            policy: webRun && !allowClicks ? 'read_only' : thread.approval ?? 'auto_edit',
             userInstructions: useStudio.getState().settings?.generation.system_prompt ?? null,
           }),
         workspace: {
-          root: info.root, api: api.workspace, limits: outputLimits(window), webOnly: webChat,
+          root: info.root, api: api.workspace, limits: outputLimits(window), webOnly: webRun,
           web: {
+            allowClicks,
             enabled: () => {
               const now = useStudio.getState()
               return webEnabled(now.conversations.find((c) => c.id === conversationId), now.settings, now.runtime?.backend)
             },
             api: {
+              browser,
+              source: api.web.source,
               search: (query, signal) => api.web.search(query, signal),
               fetch: (url, signal) => api.web.fetch(url, signal),
             },
@@ -228,7 +246,9 @@ export async function startAgentRun(
           if (message.content) void useStudio.getState().enqueueMining(conversationId, message.id, message.content)
         },
         signal: controller.signal,
-        maxSteps: webChat ? 12 : undefined,
+        maxSteps: webRun ? 12 : undefined,
+        answerAfterSource: !!find && /追加調査は不要|追加調査なし|\bno (?:further|additional) (?:research|lookups)\b/i.test(text),
+        ...(url ? { initialWebCall: { name: inspectSource ? 'web_source' : managed ? 'browser_open' : 'web_fetch', arguments: { url, ...(find ? { find } : {}) } } } : {}),
         newId: uid,
         now: Date.now,
       },

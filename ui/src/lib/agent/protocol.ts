@@ -26,14 +26,14 @@
 // Plain TypeScript with type-only imports, so `node --test` can load it.
 
 import type { ApprovalPolicy } from '../types.ts'
-import { WEB_RULES } from '../web.ts'
+import { BROWSER_RULES, WEB_RULES } from '../web.ts'
 
 // --- tools ------------------------------------------------------------------------
 
-export type ToolName = 'list_files' | 'read_file' | 'search' | 'edit_file' | 'write_file' | 'run_command' | 'web_search' | 'web_fetch'
+export type ToolName = 'list_files' | 'read_file' | 'search' | 'edit_file' | 'write_file' | 'run_command' | 'web_search' | 'web_fetch' | 'web_source' | 'browser_open' | 'browser_read' | 'browser_click'
 
 /** What a tool does, which is what the approval policy decides on. */
-export type ToolKind = 'read' | 'edit' | 'command'
+export type ToolKind = 'read' | 'edit' | 'command' | 'browser_action'
 
 export type ParamSpec = { name: string; type: 'string' | 'integer' | 'boolean'; description: string; required?: boolean }
 
@@ -105,12 +105,23 @@ export const TOOLS: readonly ToolSpec[] = [
 export const WEB_TOOLS: readonly ToolSpec[] = [
   { name: 'web_search', kind: 'read', description: 'Search the public web for current information. Returns titles, source URLs and snippets. Follow up with web_fetch to verify details.', params: [{ name: 'query', type: 'string', description: 'A focused public search query, no private data.', required: true }] },
   { name: 'web_fetch', kind: 'read', description: 'Read a public HTTP/HTTPS page and return its text and source URL. Does not execute JavaScript or log in.', params: [{ name: 'url', type: 'string', description: 'The absolute public page URL.', required: true }] },
+  { name: 'web_source', kind: 'read', description: 'Inspect public HTML and JavaScript without executing it. Lists linked scripts in HTML and returns an excerpt. Inspect those URLs to trace calculations and API calls.', params: [
+    { name: 'url', type: 'string', description: 'Absolute public page or script URL.', required: true },
+    { name: 'find', type: 'string', description: 'Optional case-sensitive literal such as a function name, API path or nearby UI label.' },
+    { name: 'offset', type: 'integer', description: 'Optional byte offset, zero by default. Use the next offset from an excerpt to continue.' },
+  ] },
 ]
 
-export const TOOL_NAMES: readonly string[] = [...TOOLS, ...WEB_TOOLS].map((t) => t.name)
+export const BROWSER_TOOLS: readonly ToolSpec[] = [
+  { name: 'browser_open', kind: 'read', description: 'Open a public page in the managed browser and read its rendered text and controls.', params: [{ name: 'url', type: 'string', description: 'Absolute public HTTP/HTTPS URL including any hash route.', required: true }] },
+  { name: 'browser_read', kind: 'read', description: 'Read the current rendered page and its visible controls in the managed browser.', params: [] },
+  { name: 'browser_click', kind: 'browser_action', description: 'Click a visible control after user approval and read the result. Use the exact ID from the latest snapshot; handoff controls are unavailable.', params: [{ name: 'control', type: 'string', description: 'Exact control ID from the current snapshot.', required: true }] },
+]
+
+export const TOOL_NAMES: readonly string[] = [...TOOLS, ...WEB_TOOLS, ...BROWSER_TOOLS].map((t) => t.name)
 
 export function toolSpec(name: string): ToolSpec | undefined {
-  return [...TOOLS, ...WEB_TOOLS].find((t) => t.name === name)
+  return [...TOOLS, ...WEB_TOOLS, ...BROWSER_TOOLS].find((t) => t.name === name)
 }
 
 /** The tools a policy offers. Read-only offers none that change anything — not even by name. */
@@ -154,6 +165,7 @@ export type AgentPromptContext = {
   root: string
   web?: boolean
   webOnly?: boolean
+  browser?: boolean
   name?: string | null
   branch?: string | null
   isGit?: boolean
@@ -209,14 +221,18 @@ const READ_ONLY_RULES = [
  * every token here is one fewer for the code.
  */
 export function buildSystemPrompt(context: AgentPromptContext): string {
-  const tools = context.webOnly ? (context.web ? [...WEB_TOOLS] : []) : [...toolsFor(context.policy), ...(context.web ? WEB_TOOLS : [])]
+  const webTools = context.web ? [...WEB_TOOLS, ...(context.webOnly && context.browser ? BROWSER_TOOLS.filter((tool) => context.policy !== 'read_only' || tool.kind === 'read') : [])] : []
+  const tools = context.webOnly ? webTools : [...toolsFor(context.policy), ...webTools]
+  const callExample = context.webOnly
+    ? '<tool_call>\n<function=web_source>\n<parameter=url>https://example.org/app.js</parameter>\n<parameter=find>function quote</parameter>\n</function>\n</tool_call>\n\n'
+    : '<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n' +
+      '<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n'
   const toolBlock =
     '# Tools\n\nYou have access to the following functions:\n\n<tools>\n' +
     tools.map((tool) => pyJson(toolSchema(tool))).join('\n') +
     '\n</tools>\n\n' +
     'If you choose to call a function ONLY reply in the following format with NO suffix:\n\n' +
-    '<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n' +
-    '<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n' +
+    callExample +
     '<IMPORTANT>\nReminder:\n' +
     '- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n' +
     '- Required parameters MUST be specified\n' +
@@ -233,7 +249,7 @@ export function buildSystemPrompt(context: AgentPromptContext): string {
   const rules = (context.policy === 'read_only' ? READ_ONLY_RULES : RULES).map((rule) => `- ${rule}`).join('\n')
 
   if (context.webOnly) {
-    return [toolBlock, `You are MISAKA Studio, a local research assistant. Today is ${context.date}. Reply in the user's language.`, context.web ? WEB_RULES : 'Web research is currently disabled. Do not make tool calls or claim to have browsed.', context.userInstructions ?? ''].join('\n\n')
+    return [toolBlock, `You are MISAKA Studio, a local research assistant. Today is ${context.date}. Reply in the user's language.`, context.web ? WEB_RULES : 'Web research is currently disabled. Do not make tool calls or claim to have browsed.', context.web && context.browser ? BROWSER_RULES : '', context.userInstructions ?? ''].filter(Boolean).join('\n\n')
   }
   const parts = [
     toolBlock,

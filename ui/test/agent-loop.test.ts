@@ -368,3 +368,89 @@ test('agent history: repeated tool results both stay, reasoning goes, failed tex
   assert.equal(history[1]!.content, `${call('read_file', { path: 'a' })}</tool_call>`)
   assert.equal(history[2]!.content, history[4]!.content)
 })
+
+test('the supplied store URL opens before the model runs and each browser click requires approval', async () => {
+  const url = 'https://misakaoptions.com/#/store'
+  const evidence = { route: 'tor' as const, sources: [{ url, title: 'Store', text: 'Rendered model details' }] }
+  let opened = false
+  let clicked = 0
+  const h = harness({
+    policy: 'full_auto',
+    replies: [
+      ({ messages }) => {
+        assert.equal(opened, true)
+        assert.match(messages.at(-1)!.content, /Rendered model details/)
+        return stopped(call('browser_click', { control: 'current:0' }))
+      },
+      stopped(call('browser_click', { control: 'next:0' })),
+      stopped('Done.'),
+    ],
+    approve: (_id, current) => {
+      assert.equal(clicked, current.asked.length - 1)
+      assert.deepEqual(toolCalls(current.conversation).at(-1)?.display, {
+        kind: 'text', text: `Click “Read more”\nPage: ${url}`,
+      })
+      return 'always'
+    },
+  })
+  h.deps.initialWebCall = { name: 'browser_open', arguments: { url } }
+  h.deps.workspace.webOnly = true
+  h.deps.workspace.web = { enabled: () => true, api: {
+    search: async () => evidence,
+    fetch: async () => evidence,
+    browser: {
+      open: async (target) => { assert.equal(target, url); opened = true; return evidence },
+      read: async () => evidence,
+      preview: async () => ({ url, label: 'Read more' }),
+      click: async () => { clicked++; return evidence },
+    },
+  } }
+  const result = await runAgentLoop(h.deps, { text: `${url} このサイトの用途を調べて` })
+  assert.equal(result.outcome, 'done')
+  assert.equal(h.asked.length, 2)
+  assert.equal(clicked, 2)
+  assert.equal(h.allowed.size, 0)
+})
+
+test('an unavailable Tor route ends the run after one request', async () => {
+  const h = harness({ replies: [] })
+  const url = 'https://example.org/'
+  const unavailable = Object.assign(new Error('Connect Tor Browser, then retry.'), { code: 'tor_unavailable' })
+  h.deps.initialWebCall = { name: 'web_source', arguments: { url } }
+  h.deps.workspace.webOnly = true
+  h.deps.workspace.web = { enabled: () => true, api: {
+    search: async () => { assert.fail('search should not run after a Tor verification failure') },
+    fetch: async () => { assert.fail('page fetch should not run after a Tor verification failure') },
+    source: async () => { throw unavailable },
+  } }
+  const result = await runAgentLoop(h.deps, { text: `${url} のアルゴリズムを分析して` })
+  assert.equal(result.outcome, 'error')
+  assert.equal(result.steps, 1)
+  assert.match(result.note ?? '', /Connect Tor Browser/)
+})
+
+test('source analysis falls back to an answer when follow-up tool calls are malformed', async () => {
+  const url = 'https://example.org/app.js'
+  const h = harness({
+    replies: [
+      stopped(call('web_source', { find: 'first' })),
+      stopped(call('web_source', { find: 'second' })),
+      ({ messages }) => {
+        assert.match(messages[0]!.content, /Write a normal answer without tool calls/)
+        assert.ok(messages.some((message) => message.content.includes('return amount * 2')))
+        return stopped('The price is twice the amount.')
+      },
+    ],
+  })
+  const evidence = { route: 'tor' as const, sources: [{ title: 'Script', url, text: 'return amount * 2' }] }
+  h.deps.initialWebCall = { name: 'web_source', arguments: { url } }
+  h.deps.workspace.webOnly = true
+  h.deps.workspace.web = { enabled: () => true, api: {
+    search: async () => evidence,
+    fetch: async () => evidence,
+    source: async () => evidence,
+  } }
+  const result = await runAgentLoop(h.deps, { text: `Analyze the algorithm at ${url}` })
+  assert.equal(result.outcome, 'done')
+  assert.equal(h.conversation.messages.at(-1)?.content, 'The price is twice the amount.')
+})

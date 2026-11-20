@@ -110,35 +110,32 @@ Windows have their webviews already. Bundle icons for Windows and macOS are gene
 ## Web research and Tor Browser
 
 Chat and Code both have a **Web off** switch in the composer. Enabling it turns prompt mining
-off for that conversation and enables `web_search` and `web_fetch` on a local model. A gateway
-answer is itself mined, so load a local model first. Web research is opt-in; existing settings
-and conversations remain offline until enabled. The agent can search current information,
-read public pages and cite source URLs. Chat's research mode has no filesystem or terminal tools.
+off for that conversation and enables research with a local model. Use Chat for browser follow-ups.
+A website research request sent from Code is routed to the research tools, without access to the
+project's files or terminal. For questions about a site's algorithm, Studio can inspect public HTML
+and linked JavaScript. It can search inside a minified script and read surrounding code to explain
+calculations and API calls. Server behavior beyond the published evidence is an inference.
 
-Every search and page fetch opens a tab in the **external Tor Browser**. Citation links in
-responses also open there. Studio never falls back to the operating system's default browser.
-Install [Tor Browser](https://www.torproject.org/download/) and finish its Connect setup first.
-The application is detected automatically on common installations; otherwise set its application
-or launcher path under **Settings → Web access & Tor Browser**.
+On macOS and Linux, install Google Chrome or Chromium to read JavaScript pages, including hash
+routes such as `/#/store`. Studio opens a visible window with a separate temporary profile. It
+can read rendered text and list visible controls on the page. When you ask Studio to operate the page, each click requires
+approval in Studio, where you can review the page URL and control label. Complete login, account forms,
+CAPTCHA, terms, payment and wallet actions yourself in the browser. The managed browser uses
+standard web ports (80 and 443). Open another conversation's managed browser or turn Web off to
+end the current session. Browser evidence is kept in the local conversation's tool history.
 
-The model's research connection defaults to **Tor** when Web is first enabled. Its SOCKS listener
-is `127.0.0.1:9150` for Tor Browser (`127.0.0.1:9050` for standalone Tor). Web tool requests use
-SOCKS5 with remote hostname resolution, as recommended in the
-[Tor Project's DNS leak guidance](https://support.torproject.org/little-t-tor/troubleshooting/check-for-leaks/).
-Before sending a query or page request, Studio verifies the SOCKS listener is using a Tor exit
-(successful checks are cached for one minute). A failed Tor connection or verification stops the
-request; it never retries through a direct connection. **Save &
-test connection** asks Tor Project to verify the exit and displays the result. Direct research
-is an explicit alternative in Settings; browser tabs still open in Tor Browser in that mode.
+Choose the route in **Settings → Web access & Tor Browser**. **Tor** is the default the first
+time Web is enabled. Connect [Tor Browser](https://www.torproject.org/download/) or start standalone
+Tor. The default SOCKS address is `127.0.0.1:9150` for Tor Browser and `127.0.0.1:9050` for
+standalone Tor. Studio verifies the Tor exit before a Web request and ends the run if verification fails. The managed browser routes
+page traffic and DNS through the same SOCKS listener, with no direct fallback. It uses Chromium's
+browser fingerprint. **Direct** uses the machine's normal internet connection. Model downloads,
+mining and terminal commands use separate connections.
 
-This routes the built-in research tools and their DNS through Tor. It does not route model
-downloads, mining, terminal commands, or the rest of the computer's traffic. It does not promise
-complete anonymity. The model reads bounded public text, without signing in or executing web
-JavaScript; interactive/sign-in pages can be viewed in Tor Browser but are not controlled or
-read through its logged-in session. Search uses Bing with a DuckDuckGo fallback on the same
-connection route; either provider may refuse automation or Tor exit nodes. Web content is
-untrusted evidence, not instructions to run commands or disclose files. Research text is kept
-in the conversation's local tool history, like other tool results.
+Built-in text search and page fetch use the selected connection without opening browser tabs.
+Open a citation link to view it in Tor Browser. Set the Tor Browser application or launcher path
+in Settings if detection fails. Text search uses Bing with a DuckDuckGo fallback on the selected route. A site or provider
+can refuse automated or Tor traffic. Web content is untrusted evidence.
 
 ## Working in the window
 

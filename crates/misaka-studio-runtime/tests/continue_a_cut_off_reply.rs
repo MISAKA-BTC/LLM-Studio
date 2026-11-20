@@ -24,15 +24,37 @@ use std::sync::{Arc, Mutex};
 type Seen = Arc<Mutex<Vec<serde_json::Value>>>;
 
 async fn gateway() -> (String, Seen) {
+    gateway_with_context(512, false).await
+}
+
+async fn gateway_with_context(window: u64, refuse_first: bool) -> (String, Seen) {
     let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let app = axum::Router::new()
-        .route("/health", get(|| async { Json(serde_json::json!({ "class_id": "4277d84f", "n_ctx": 512, "can_submit": true })) }))
+        .route(
+            "/health",
+            get(move || async move { Json(serde_json::json!({ "class_id": "4277d84f", "n_ctx": window, "can_submit": true })) }),
+        )
         .route(
             "/v1/chat/completions",
-            post(|State(seen): State<Seen>, Json(body): Json<serde_json::Value>| async move {
-                seen.lock().unwrap().push(body);
+            post(move |State(seen): State<Seen>, Json(body): Json<serde_json::Value>| async move {
+                let first = {
+                    let mut seen = seen.lock().unwrap();
+                    seen.push(body);
+                    seen.len() == 1
+                };
+                if first && refuse_first {
+                    return (axum::http::StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                        "error": {
+                            "code": 400,
+                            "message": "request (16105 tokens) exceeds the available context size (8192 tokens), try increasing it",
+                            "type": "exceed_context_size_error",
+                            "n_prompt_tokens": 16105,
+                            "n_ctx": 8192,
+                        }
+                    }))).into_response();
+                }
                 let sse = "data: {\"choices\":[{\"delta\":{\"content\":\" y_1 について解くと\"}}]}\n\n\
                            data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
                            data: [DONE]\n\n";
@@ -171,4 +193,34 @@ async fn a_continuation_with_no_room_is_refused_with_a_sentence() {
     };
     assert!(refused.contains("新しいチャット"), "{refused}");
     assert!(seen.lock().unwrap().is_empty(), "nothing reached the lane");
+}
+
+#[tokio::test]
+async fn http_context_refusal_replans_before_streaming() {
+    let (url, seen) = gateway_with_context(8192, true).await;
+    let (state, _data) = studio(&url, None).await;
+    let question = "マイクラを Java で遊ぶにはどれを買えばいい？";
+    let history = "abcdefgh ".repeat(1600);
+    let messages = vec![
+        ChatMessage::new("system", "日本語で答えてください。"),
+        ChatMessage::new("user", "前の質問"),
+        ChatMessage::new("assistant", history.clone()),
+        ChatMessage::new("user", question),
+    ];
+    let (report, mut stream) = state
+        .generate_managed(messages, None, SamplingCommitment { max_tokens: 2048, ..Default::default() }, vec![], vec![])
+        .await
+        .expect("the initial HTTP 400 is recovered");
+    let report = report.unwrap();
+    assert_eq!(report.window, 8192);
+    assert!(report.managed && report.older_messages > 0);
+    assert!(matches!(stream.next().await, Some(Ok(StreamEvent::Delta(_)))));
+
+    let bodies = seen.lock().unwrap();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0]["messages"][2]["content"], history);
+    let retried: Vec<ChatMessage> = serde_json::from_value(bodies[1]["messages"].clone()).unwrap();
+    assert_eq!(retried.last().unwrap().content, question);
+    assert!(!retried.iter().any(|message| message.content == history));
+    assert_eq!(report.sent.as_ref(), Some(&retried));
 }

@@ -19,7 +19,7 @@ export function WebChip({ conversation, createThread, disabled }: { conversation
     try {
       if (!enabled) {
         const browser = await api.web.browser()
-        if (!browser.installed) throw new Error('Install Tor Browser or set its application path in Settings → Web access.')
+        if (!browser.installed && !browser.managed) throw new Error('Install Tor Browser or Chromium for Web research.')
         if (!settings.web || settings.web.mode === 'off') {
           const saved = await api.saveSettings({ ...settings, web: { ...settings.web, mode: 'tor', tor_proxy: settings.web?.tor_proxy ?? '127.0.0.1:9150', tor_browser_path: settings.web?.tor_browser_path ?? null } })
           useStudio.setState({ settings: saved })
@@ -27,12 +27,13 @@ export function WebChip({ conversation, createThread, disabled }: { conversation
       }
       const id = conversation?.id ?? createThread()
       studio.updateConversation(id, enabled ? { web: false } : { web: true, mine: false })
+      if (enabled) void api.web.session(id, { action: 'close' }).catch(() => {})
     } catch (error) { studio.toast('error', (error as Error).message) }
     finally { setSaving(false) }
   }
   return <button type="button" className={`chip shrink-0 ${enabled ? 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300' : 'text-ink-500'}`}
     disabled={disabled || saving} aria-pressed={enabled} onClick={() => void toggle()}
-    title={unavailable ? 'A local model is required for Web research' : enabled ? `Web research on (${settings?.web?.mode}). Mining is off. Pages open in Tor Browser.` : 'Enable Web research and turn mining off for this conversation. Pages open in Tor Browser.'}>
+    title={unavailable ? 'A local model is required for Web research' : enabled ? `Web research on (${settings?.web?.mode}). Mining is off. Text research uses the selected connection. Open a citation to view it in Tor Browser.` : 'Enable Web research and turn mining off for this conversation.'}>
     <Icon name="globe" className="size-3.5" /><span>{saving ? '…' : enabled ? settings?.web?.mode === 'tor' ? 'Web · Tor' : 'Web · Direct' : 'Web off'}</span>
   </button>
 }

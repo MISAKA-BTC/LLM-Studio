@@ -18,6 +18,7 @@ import { attachmentFromText, baseName, MAX_ATTACHMENT_BYTES } from '../../lib/at
 import { startAgentRun, stopAgentRun, useAgent } from '../../lib/agent/run'
 import { bytes } from '../../lib/format'
 import { matches } from '../../lib/keys'
+import { isWebTask, webEnabled } from '../../lib/web'
 import {
   findCommand,
   fuzzyFilter,
@@ -259,6 +260,19 @@ export const Composer = memo(function Composer({
     // Sent with the mouse, the focus is on a button that is about to become Stop; the next message
     // is typed here.
     textarea.current?.focus({ preventScroll: true })
+
+    if (isWebTask(text)) {
+      if (!webEnabled(conversation ?? undefined, studio.settings, studio.runtime?.backend)) {
+        studio.toast('info', 'Enable Web in the composer and load a local model before researching a site.')
+        return
+      }
+      if (conversation) {
+        useComposer.getState().clear(key)
+        onSend?.()
+        await startAgentRun(conversation.id, text.trim(), attachments.length ? attachments : undefined)
+        return
+      }
+    }
 
     if (mode === 'agent') {
       let id = conversation?.id ?? null

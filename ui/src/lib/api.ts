@@ -1,3 +1,4 @@
+import type { SourceQuery } from './web'
 // The client for the MISAKA Runtime API.
 //
 // One rule runs through this file: **the UI is an ordinary client of the public API.** Chat goes
@@ -100,10 +101,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   web: {
-    browser: () => request<{ installed: boolean; path: string | null }>('/api/v1/web/browser'),
+    browser: () => request<{ installed: boolean; path: string | null; managed: boolean }>('/api/v1/web/browser'),
     open: (url: string) => request<{ opened: boolean }>('/api/v1/web/open', { method: 'POST', body: JSON.stringify({ url, mining: false }) }),
     search: (query: string, signal?: AbortSignal) => request<WebResult>('/api/v1/web/search', { method: 'POST', body: JSON.stringify({ query, mining: false }), signal }),
     fetch: (url: string, signal?: AbortSignal) => request<WebResult>('/api/v1/web/fetch', { method: 'POST', body: JSON.stringify({ url, mining: false }), signal }),
+    source: (query: SourceQuery, signal?: AbortSignal) => request<WebResult>('/api/v1/web/source', { method: 'POST', body: JSON.stringify({ ...query, mining: false }), signal }),
+    session: <T = WebResult>(thread: string, action: { action: 'open'; url: string } | { action: 'preview' | 'click'; control: string } | { action: 'read' | 'close' }, signal?: AbortSignal) =>
+      request<T>('/api/v1/web/session', { method: 'POST', body: JSON.stringify({ thread, mining: false, ...action }), signal }),
     check: () => request<{ route: 'direct' | 'tor'; is_tor: boolean; ip: string }>('/api/v1/web/check', { method: 'POST' }),
   },
   health: () => request<{ status: string; version: string }>('/api/v1/health'),

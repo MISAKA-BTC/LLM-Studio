@@ -424,7 +424,7 @@ pub fn context_limit_from_refusal(message: &str) -> Option<u64> {
         let digits: String = rest.trim_start().chars().take_while(char::is_ascii_digit).collect();
         digits.parse().ok()
     };
-    after("max_context_tokens ").or_else(|| after("rotary table covers "))
+    llama_context_field(message, "n_ctx").or_else(|| after("max_context_tokens ")).or_else(|| after("rotary table covers "))
 }
 
 /// **The prompt length an engine's own refusal names**, in the engine's tokens.
@@ -438,7 +438,17 @@ pub fn refusal_prompt_tokens(message: &str) -> Option<u64> {
         let digits: String = rest.trim_start().chars().take_while(char::is_ascii_digit).collect();
         digits.parse().ok()
     };
-    after("the prompt is ").or_else(|| after("prompt "))
+    llama_context_field(message, "n_prompt_tokens").or_else(|| after("the prompt is ")).or_else(|| after("prompt "))
+}
+
+fn llama_context_field(message: &str, field: &str) -> Option<u64> {
+    let (_, json) = message.split_once('{')?;
+    let body: serde_json::Value = serde_json::from_str(&format!("{{{json}")).ok()?;
+    let error = &body["error"];
+    if error["type"].as_str()? != "exceed_context_size_error" {
+        return None;
+    }
+    error[field].as_u64().filter(|value| *value > 0)
 }
 
 pub fn approximate_tokens(text: &str) -> u64 {

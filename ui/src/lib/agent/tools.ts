@@ -48,7 +48,7 @@ export type WorkspaceApi = {
 }
 
 /** The kinds of call the policy can be asked about. Reads never are. */
-export type ApprovalKind = Exclude<ToolKind, 'read'>
+export type ApprovalKind = Exclude<ToolKind, 'read' | 'browser_action'>
 
 /** Characters of tool output the model is sent, per tool. */
 export type OutputLimits = { read: number; search: number; list: number; exec: number }
@@ -57,7 +57,7 @@ export type ToolContext = {
   /** The workspace's absolute path. */
   root: string
   webOnly?: boolean
-  web?: { api: WebApi; enabled: () => boolean }
+  web?: { api: WebApi; enabled: () => boolean; allowClicks?: boolean }
   api: WorkspaceApi
   policy: ApprovalPolicy
   /** Kinds the person chose "Always allow" for in this thread. */
@@ -68,6 +68,7 @@ export type ToolContext = {
 /** What a call came to. */
 export type ToolOutcome = {
   status: 'done' | 'error'
+  stopRun?: boolean
   /** Exactly what the model is sent. */
   output: string
   /** One line for the card's header. */
@@ -121,6 +122,7 @@ export function outputLimits(contextTokens: number | null | undefined): OutputLi
 /** What the policy says about a call of this kind. */
 export function approvalFor(kind: ToolKind, policy: ApprovalPolicy, allowed: ReadonlySet<ApprovalKind> = new Set()): 'auto' | 'ask' | 'refuse' {
   if (kind === 'read') return 'auto'
+  if (kind === 'browser_action') return policy === 'read_only' ? 'refuse' : 'ask'
   if (policy === 'read_only') return 'refuse'
   if (kind === 'edit') return policy === 'ask' && !allowed.has('edit') ? 'ask' : 'auto'
   return policy === 'full_auto' || allowed.has('command') ? 'auto' : 'ask'
@@ -268,7 +270,11 @@ export function summarizeCall(name: string, args: Record<string, unknown>): stri
   const path = typeof args.path === 'string' && args.path.trim() ? cleanPath(args.path) : null
   switch (name) {
     case 'web_search': return `Web search: ${String(args.query ?? '')}`
+    case 'web_source': return `Inspect source: ${String(args.url ?? '')}`
     case 'web_fetch': return `Read Web page: ${String(args.url ?? '')}`
+    case 'browser_open': return `Open browser page: ${String(args.url ?? '')}`
+    case 'browser_read': return 'Read the current browser page'
+    case 'browser_click': return 'Click a browser control'
     case 'list_files':
       return `List ${path && path !== '.' ? path : 'the workspace'}`
     case 'read_file': {
@@ -438,16 +444,22 @@ function capStream(text: string): string {
 export async function prepareCall(call: { name: string; args: Record<string, unknown> }, context: ToolContext): Promise<PreparedCall> {
   const name = canonicalToolName(call.name)
   const spec = toolSpec(name)
+  const readOnlyWeb = context.web?.allowClicks === false || context.policy === 'read_only'
   if (!spec) {
     const known = TOOL_NAMES.filter((n) => {
-      const web = n === 'web_search' || n === 'web_fetch'
-      return (web ? context.web?.enabled() : !context.webOnly) && (context.policy !== 'read_only' || toolSpec(n)?.kind === 'read')
+      if (n.startsWith('browser_')) return context.web?.enabled() && !!context.web.api.browser && (n !== 'browser_click' || !readOnlyWeb)
+      if (n.startsWith('web_')) return context.web?.enabled()
+      return !context.webOnly && (context.policy !== 'read_only' || toolSpec(n)?.kind === 'read')
     }).join(', ')
     return settled(failure(call.name || 'Tool call', `there is no tool called ${JSON.stringify(call.name)}. The tools are: ${known}.`))
   }
-  const isWeb = name === 'web_search' || name === 'web_fetch'
-  if ((context.webOnly && !isWeb) || (isWeb && !context.web?.enabled())) {
+  const browser = name.startsWith('browser_')
+  const isWeb = browser || name.startsWith('web_')
+  if ((context.webOnly && !isWeb) || (isWeb && !context.web?.enabled()) || (browser && !context.web?.api.browser)) {
     return settled(failure(name, 'This tool is not enabled. Web tools require Web access on, mining off, and a local model. Chat has no file or command tools.'))
+  }
+  if (name === 'browser_click' && readOnlyWeb) {
+    return settled(failure(name, 'This is a read-only Web request. Answer from the page text or read another public URL if needed.'))
   }
   const coerced = coerceArgs(spec, call.args)
   const summary = summarizeCall(name, call.args)
@@ -463,7 +475,52 @@ export async function prepareCall(call: { name: string; args: Record<string, unk
     )
   }
   try {
+    const webOutcome = (result: Awaited<ReturnType<WebApi['fetch']>>, title = summary): ToolOutcome => {
+      if (browser && readOnlyWeb) {
+        const separator = '\nRendered page text:\n'
+        result = { ...result, sources: result.sources.map((source) => {
+          const start = source.text.indexOf(separator)
+          return start < 0 ? source : { ...source, text: source.text.slice(start + separator.length) }
+        }) }
+      }
+      const output = formatWebResult(result, context.limits.read)
+      return { status: 'done', summary: title, output, display: { kind: 'text', text: output } }
+    }
     switch (spec.name) {
+      case 'browser_open':
+      case 'browser_read':
+        return runReading(args, summary, async (signal) => {
+          const api = context.web?.api.browser
+          if (!api || !context.web?.enabled()) return failure(summary, 'Web access was disabled before the request ran.')
+          return webOutcome(spec.name === 'browser_open' ? await api.open(String(args.url), signal) : await api.read(signal))
+        })
+      case 'browser_click': {
+        const api = context.web!.api.browser!
+        const control = String(args.control)
+        const { url, label, destination } = await api.preview(control)
+        const title = `Click “${label}”`
+        return {
+          ...runReading(args, title, async (signal) => {
+            if (!context.web?.enabled()) return failure(title, 'Web access was disabled before the click.')
+            return webOutcome(await api.click(control, signal), title)
+          }),
+          toolKind: 'browser_action',
+          approval: 'ask',
+          preview: { kind: 'text', text: `${title}\nPage: ${url}${destination ? `\nDestination: ${destination}` : ''}` },
+        }
+      }
+      case 'web_source': {
+        const offset = Number(args.offset ?? 0)
+        if (!Number.isSafeInteger(offset) || offset < 0) return settled(failure(summary, 'offset must be a nonnegative whole number.'))
+        return runReading(args, summary, async (signal) => {
+          const web = context.web
+          if (!web?.enabled() || !web.api.source) return failure(summary, 'Source inspection is unavailable.')
+          return webOutcome(await web.api.source({
+            url: String(args.url), offset,
+            ...(typeof args.find === 'string' ? { find: args.find } : {}),
+          }, signal))
+        })
+      }
       case 'web_search':
       case 'web_fetch':
         return runReading(args, summary, async (signal) => {
@@ -471,8 +528,7 @@ export async function prepareCall(call: { name: string; args: Record<string, unk
           const result = spec.name === 'web_search'
             ? await context.web.api.search(String(args.query), signal)
             : await context.web.api.fetch(String(args.url), signal)
-          const output = formatWebResult(result, context.limits.read)
-          return { status: 'done', summary, output, display: { kind: 'text', text: output } }
+          return webOutcome(result)
         })
       case 'list_files':
         return prepareList(args, context, summary)
@@ -488,11 +544,16 @@ export async function prepareCall(call: { name: string; args: Record<string, unk
         return prepareCommand(args, context, summary, approval)
     }
   } catch (error) {
-    return settled(failure(summary, forModel(errorText(error))))
+    return settled(readFailure(summary, error))
   }
 }
 
-function runReading(args: Record<string, unknown>, summary: string, run: (signal: AbortSignal) => Promise<ToolOutcome>): PreparedCall {
+function readFailure(summary: string, error: unknown): ToolOutcome {
+  const outcome = failure(summary, forModel(errorText(error)))
+  return (error as { code?: string } | null)?.code === 'tor_unavailable' ? { ...outcome, stopRun: true } : outcome
+}
+
+function runReading(args: Record<string, unknown>, summary: string, run: (signal: AbortSignal) => Promise<ToolOutcome>): Extract<PreparedCall, { kind: 'run' }> {
   return {
     kind: 'run',
     toolKind: 'read',
@@ -503,7 +564,7 @@ function runReading(args: Record<string, unknown>, summary: string, run: (signal
       try {
         return await run(signal)
       } catch (error) {
-        return failure(summary, forModel(errorText(error)))
+        return readFailure(summary, error)
       }
     },
   }

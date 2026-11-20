@@ -93,6 +93,8 @@ pub struct RuntimeStatus {
 
 pub struct AppState {
     pub settings: RwLock<Settings>,
+    #[cfg(unix)]
+    pub(crate) web_browser: crate::api::web::browser_session::Browser,
     pub settings_path: PathBuf,
     pub data_dir: PathBuf,
     pub hardware: HardwareSnapshot,
@@ -150,6 +152,8 @@ impl AppState {
         let engines = Arc::new(crate::engines::EngineInstaller::new(data_dir.join("engines").join("llama.cpp")));
         let app = Arc::new(AppState {
             settings: RwLock::new(settings),
+            #[cfg(unix)]
+            web_browser: Default::default(),
             settings_path,
             data_dir,
             hardware,
@@ -458,6 +462,10 @@ impl AppState {
         }
 
         *self.settings.write().await = new.clone();
+        #[cfg(unix)]
+        if old.web.mode != new.web.mode || old.web.tor_proxy != new.web.tor_proxy {
+            self.web_browser.reset_route(&new.web).await;
+        }
         Ok(new)
     }
 
@@ -508,18 +516,35 @@ impl AppState {
     /// Load a model into the engine that can run it.
     pub async fn load(&self, model_id: &str, context_override: Option<u32>) -> Result<RuntimeStatus> {
         let _one_at_a_time = self.load_lock.lock().await;
-        // Asked for what is already loaded — typically a chat that waited here for the startup load
-        // of the same model: that load is the answer, not a reason to start the engine again.
+        let mut model = self.store.require(model_id).await?;
+        let settings = self.settings.read().await.clone();
+        let mut backend = self.backend_for(&model, &settings).await;
+        if backend.name() == MisakaBackend::NAME && palw_q36_container(&model.path) {
+            // This artifact's manifest identifies the exact GGUF it was converted from.
+            // A similar filename is insufficient evidence to substitute another model.
+            let source_gguf = match model.id.as_str() {
+                "Huihui-Qwen3.5-9B-abliterated-8k" => self.store.get("Huihui-Qwen3.5-9B-abliterated-Q4_K_M").await,
+                _ => None,
+            };
+            let Some(gguf) = source_gguf.filter(|alternate| alternate.path.extension().is_some_and(|ext| ext == "gguf")) else {
+                return Err(Error::bad_request(format!(
+                    "{} は PALWQ361 形式です。現在の misaka-palw-serve はこの形式に対応しておらず、自動切り替えに使える GGUF 版が見つかりません。",
+                    model.id
+                )));
+            };
+            tracing::info!(requested = %model.id, selected = %gguf.id, "using the source GGUF for a PALWQ361 chat request");
+            model = gguf;
+            backend = self.backend_for(&model, &settings).await;
+        }
+
+        // Compare after resolving the alternate so retries reuse an already loaded model.
         if let Some(current) = self.loaded().await
-            && current.model.id == model_id
+            && current.model.id == model.id
             && context_override.is_none_or(|n| n == current.loaded.context_size)
             && self.backend().await.loaded().await.is_some()
         {
             return Ok(self.status_from(Some(&current), true).await);
         }
-        let model = self.store.require(model_id).await?;
-        let settings = self.settings.read().await.clone();
-        let backend = self.backend_for(&model, &settings).await;
 
         // A PALW artifact is not a GGUF. `llama-server` reads its first four bytes, finds `PALW`
         // where `GGUF` should be, and aborts — and what the user got for a file the Studio already
@@ -742,13 +767,20 @@ impl AppState {
         // system prompt and the question always, then the pinned notes, recent turns whole, and a
         // memory of the older ones, inside the window less the answer's reserve.
         let window = state.loaded.context_size as u64;
+        let is_llama = backend.name() == "llamacpp";
         let counter = if prompt.is_none() { Some(self.token_counter_for(&state.model).await) } else { None };
         let mut report: Option<ContextReport> = None;
         // Kept for a refusal's retry, which plans again from what the client sent.
         let client_messages = if counter.is_some() { messages.clone() } else { Vec::new() };
         let messages = match &counter {
             Some(counter) => {
-                let plan = self.plan_context(&backend, &messages, &pinned, window, params.max_tokens, counter, 1000).await?;
+                let plan = match self.plan_context(&backend, &messages, &pinned, window, params.max_tokens, counter, 1000).await {
+                    Ok(plan) => plan,
+                    Err(error) if is_llama && window > 0 => {
+                        compact_llama_chat(&messages, &pinned, window, params.max_tokens, 1, counter).ok_or(error)?
+                    }
+                    Err(error) => return Err(error),
+                };
                 if plan.report.managed {
                     tracing::info!(
                         window,
@@ -765,106 +797,99 @@ impl AppState {
             None => messages,
         };
 
-        // The bytes the record commits to. Canonical and length-prefixed — see
-        // `canonical_prompt_bytes`, which exists because the obvious `role: content` flattening
-        // lets two different conversations produce the same commitment.
-        let prompt_bytes = match &prompt {
-            Some(raw) => canonical_raw_prompt_bytes(raw),
-            None => {
-                let pairs: Vec<(&str, &str)> = messages.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
-                canonical_prompt_bytes(&pairs)
-            }
-        };
-
-        let exact_tokens = counter.as_ref().filter(|c| c.is_exact()).and(report.as_ref()).map(|r| r.prompt_tokens);
-        let request = GenerationRequest {
+        let mut request = GenerationRequest {
             model: state.model.id.clone(),
             messages,
             prompt,
             params,
-            stop: stop.clone(),
-            prompt_tokens: exact_tokens,
-            // Not part of `params`, so not in the record: it changes how the template renders the
-            // turn (Qwen3 opens an empty think block), which the prompt commitment — over the
-            // messages — does not see. See `GenerateOptions::disable_thinking`.
+            stop,
+            prompt_tokens: counter.as_ref().filter(|c| c.is_exact()).and(report.as_ref()).map(|r| r.prompt_tokens),
             disable_thinking,
         };
-        let is_chat = request.prompt.is_none();
 
         self.metrics.generation_started();
-        // The clock starts as the request goes out — before the refusal check below takes the first
-        // event, which would otherwise already be in hand when timing began, and every record would
-        // say the first token arrived in 0 ms.
         let started = Instant::now();
         let started_at_unix_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-        let inner = match backend.generate(request).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                // The counter must come back down on the failure path too, or "1 generation
-                // active" sticks forever after one bad request.
-                self.metrics.generation_finished(0, 0.0, 0);
-                return Err(e);
-            }
-        };
 
-        // **The refusal arrives in the stream, not from the call.** The engine answers 200 and
-        // puts "prompt 257 + decode ceiling 256 exceeds max_context_tokens 512" in the first event,
-        // so a retry that only watches `generate`'s return value never fires. Nothing has reached
-        // the user at this point, which is what makes taking one item and deciding safe.
-        //
-        // The refusal names the window and the engine's count of the prompt. Planned again with
-        // both — the count scaled by how far the app's own count fell short — the request that
-        // fits is arithmetic, and it is asked for once.
-        let mut inner = inner;
-        let first = inner.next().await;
-        let (mut inner, first) = match (&first, &counter, &report) {
-            (Some(Err(e)), Some(counter), Some(sent)) if is_chat => {
-                let message = e.to_string();
-                match crate::backend::context_limit_from_refusal(&message) {
-                    Some(limit) => {
-                        let engine_count = crate::backend::refusal_prompt_tokens(&message).unwrap_or(0);
-                        let scale = if sent.prompt_tokens > 0 && engine_count > sent.prompt_tokens {
-                            (engine_count * 1000).div_ceil(sent.prompt_tokens) + 50
-                        } else {
-                            1100
-                        };
-                        let window = if window == 0 { limit } else { window.min(limit) };
-                        let before = sent.prompt_tokens;
-                        match self.plan_context(&backend, &client_messages, &pinned, window, params.max_tokens, counter, scale).await {
-                            Ok(plan) if plan.report.prompt_tokens < before => {
-                                tracing::info!(
-                                    limit,
-                                    engine_count,
-                                    scale,
-                                    "the engine refused the prompt's length; planned again in its count and retried"
-                                );
-                                let retry = GenerationRequest {
-                                    model: state.model.id.clone(),
-                                    messages: plan.messages.clone(),
-                                    prompt: None,
-                                    params,
-                                    stop: stop.clone(),
-                                    prompt_tokens: None,
-                                    disable_thinking,
-                                };
-                                match backend.generate(retry).await {
-                                    Ok(mut s2) => {
-                                        let f2 = s2.next().await;
-                                        report = Some(plan.report);
-                                        (s2, f2)
-                                    }
-                                    Err(_) => (inner, first),
-                                }
+        // llama.cpp rejects a context overflow as an HTTP error. Other engines can send the
+        // refusal as the first stream item. Neither path has emitted any visible output yet.
+        let attempt = async {
+            match start_generation(&backend, request.clone()).await {
+                Ok(generation) => Ok(generation),
+                Err(error) => {
+                    let message = error.to_string();
+                    let (Some(counter), Some(sent), Some(limit)) =
+                        (&counter, &report, crate::backend::context_limit_from_refusal(&message))
+                    else {
+                        return Err(error);
+                    };
+                    let engine_count = crate::backend::refusal_prompt_tokens(&message).unwrap_or(0);
+                    let scale = if sent.prompt_tokens > 0 && engine_count > sent.prompt_tokens {
+                        engine_count.saturating_mul(1000).div_ceil(sent.prompt_tokens).saturating_add(50)
+                    } else {
+                        1100
+                    };
+                    let window = if window == 0 { limit } else { window.min(limit) };
+                    match self.plan_context(&backend, &client_messages, &pinned, window, params.max_tokens, counter, scale).await {
+                        Ok(plan) if plan.report.prompt_tokens < sent.prompt_tokens => {
+                            tracing::info!(limit, engine_count, scale, "retrying with a smaller chat context");
+                            request.messages = plan.messages;
+                            request.prompt_tokens = None;
+                            report = Some(plan.report);
+                            match start_generation(&backend, request.clone()).await {
+                                Ok(generation) => return Ok(generation),
+                                Err(error) if crate::backend::context_limit_from_refusal(&error.to_string()).is_some() => {}
+                                Err(error) => return Err(error),
                             }
-                            _ => (inner, first),
+                        }
+                        Err(error) if !is_llama => return Err(error),
+                        _ => {}
+                    }
+
+                    if is_llama {
+                        // An oversized system prompt, attachment, or tool result can exhaust the
+                        // window without any old history. Retry with bounded excerpts of those inputs.
+                        for reduction in [1, 2, 4] {
+                            let Some(plan) =
+                                compact_llama_chat(&client_messages, &pinned, window, params.max_tokens, reduction, counter)
+                            else {
+                                break;
+                            };
+                            if request.messages == plan.messages {
+                                continue;
+                            }
+                            tracing::info!(window, reduction, "retrying with excerpts of required chat inputs");
+                            request.messages = plan.messages;
+                            request.prompt_tokens = None;
+                            report = Some(plan.report);
+                            match start_generation(&backend, request.clone()).await {
+                                Ok(generation) => return Ok(generation),
+                                Err(error) if crate::backend::context_limit_from_refusal(&error.to_string()).is_some() => {}
+                                Err(error) => return Err(error),
+                            }
                         }
                     }
-                    None => (inner, first),
+                    Err(context_overflow(window, &client_messages))
                 }
             }
-            _ => (inner, first),
+        }
+        .await;
+        let (mut inner, first) = match attempt {
+            Ok(generation) => generation,
+            Err(error) => {
+                self.metrics.generation_finished(0, 0.0, 0);
+                return Err(error);
+            }
         };
 
+        // Commit to the messages that actually reached the model, including after a retry.
+        let prompt_bytes = match &request.prompt {
+            Some(raw) => canonical_raw_prompt_bytes(raw),
+            None => {
+                let pairs: Vec<(&str, &str)> = request.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
+                canonical_prompt_bytes(&pairs)
+            }
+        };
         let app = self.clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(32);
@@ -1370,6 +1395,13 @@ pub fn offload_note(setting: GpuLayers, offload: Option<&Offload>, hardware: &Ha
     }
 }
 
+fn palw_q36_container(path: &std::path::Path) -> bool {
+    use std::io::Read;
+
+    let mut magic = [0; 8];
+    std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut magic)).is_ok() && &magic == b"PALWQ361"
+}
+
 /// **The file and the engine, checked against each other.**
 ///
 /// Returns why a load cannot work, or `None` when the pair is fine. A free function, and pure, so
@@ -1396,6 +1428,45 @@ fn engine_pairing_refusal(model_id: &str, file_name: Option<&str>, backend: &str
              chat with this model."
         )),
         _ => None,
+    }
+}
+
+type StartedGeneration = (BoxStream<'static, Result<StreamEvent>>, Option<Result<StreamEvent>>);
+
+async fn start_generation(backend: &SharedBackend, request: GenerationRequest) -> Result<StartedGeneration> {
+    let mut stream = backend.generate(request).await?;
+    let first = match stream.next().await {
+        Some(Err(error)) if crate::backend::context_limit_from_refusal(&error.to_string()).is_some() => return Err(error),
+        event => event,
+    };
+    Ok((stream, first))
+}
+
+fn compact_llama_chat(
+    messages: &[ChatMessage],
+    pinned: &[String],
+    window: u64,
+    max_tokens: u64,
+    reduction: u64,
+    counter: &TokenCounter,
+) -> Option<ContextPlan> {
+    // The model's byte-level tokenizer can normally encode at least one byte per token.
+    // Leave room for the chat template and reply, and shrink again if the engine still refuses.
+    let bytes = window.saturating_sub(crate::backend::answer_room(max_tokens, window)).saturating_sub(128) / reduction;
+    (bytes >= 64)
+        .then(|| crate::context::compact_required_chat(messages, pinned, window, max_tokens, bytes as usize, counter))
+        .flatten()
+}
+
+fn context_overflow(window: u64, messages: &[ChatMessage]) -> Error {
+    if messages.iter().any(|message| !message.content.is_ascii()) {
+        Error::bad_request(format!(
+            "入力がモデルのコンテキスト上限（{window}トークン）に収まりません。最新の入力や添付テキストを短くするか、分けて送信してください。"
+        ))
+    } else {
+        Error::bad_request(format!(
+            "The input does not fit this model's {window}-token context. Shorten the latest message or attached text, or send it in parts."
+        ))
     }
 }
 

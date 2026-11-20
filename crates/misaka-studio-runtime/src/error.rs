@@ -37,6 +37,11 @@ pub enum Error {
     #[error("download failed: {message}")]
     Download { message: String },
 
+    #[error(
+        "Tor connection could not be verified. Connect Tor Browser or start Tor on the configured SOCKS port, then retry. Web research stays on Tor."
+    )]
+    TorUnavailable,
+
     #[error("{message}")]
     BadRequest { message: String },
 
@@ -80,7 +85,7 @@ impl Error {
         match self {
             // 503 rather than 400: the request is fine, the server is not ready for it — which
             // is what makes a retry the right client behaviour.
-            Error::NoModelLoaded | Error::BackendUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Error::NoModelLoaded | Error::BackendUnavailable { .. } | Error::TorUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Error::ModelNotFound { .. } => StatusCode::NOT_FOUND,
             Error::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Error::Forbidden { .. } => StatusCode::FORBIDDEN,
@@ -97,7 +102,7 @@ impl Error {
             Error::BadRequest { .. } => "invalid_request_error",
             Error::Forbidden { .. } => "permission_error",
             Error::ModelNotFound { .. } => "model_not_found",
-            Error::NoModelLoaded | Error::BackendUnavailable { .. } => "service_unavailable",
+            Error::NoModelLoaded | Error::BackendUnavailable { .. } | Error::TorUnavailable => "service_unavailable",
             _ => "server_error",
         }
     }
@@ -126,6 +131,7 @@ impl IntoResponse for Error {
                 code: match &self {
                     Error::ModelNotFound { .. } => Some("model_not_found".into()),
                     Error::NoModelLoaded => Some("no_model_loaded".into()),
+                    Error::TorUnavailable => Some("tor_unavailable".into()),
                     Error::Forbidden { .. } => Some("forbidden".into()),
                     _ => None,
                 },

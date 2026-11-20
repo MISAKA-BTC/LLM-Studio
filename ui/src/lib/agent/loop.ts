@@ -79,6 +79,8 @@ export type AgentLoopDeps = {
   newId: () => string
   now: () => number
   maxSteps?: number
+  answerAfterSource?: boolean
+  initialWebCall?: { name: 'browser_open' | 'web_fetch' | 'web_source'; arguments: { url: string; find?: string } }
 }
 
 export type LoopOutcome = 'done' | 'stopped' | 'error' | 'limit' | 'stuck'
@@ -236,6 +238,9 @@ export async function runAgentLoop(deps: AgentLoopDeps, request: { text: string;
   let lastKey: string | null = null
   let repeats = 0
   let emptySteps = 0
+  let hasSource = false
+  let answerOnly = false
+  const sourceAnswerPrompt = 'Answer the user in their language using the public source excerpts already in this turn. Explain what the code actually does and cite its source URL. If the excerpt does not establish part of the answer, identify what is missing. Write a normal answer without tool calls.'
 
   for (let step = 1; step <= maxSteps; step++) {
     if (deps.signal.aborted) return { outcome: 'stopped', steps: step - 1 }
@@ -245,14 +250,18 @@ export async function runAgentLoop(deps: AgentLoopDeps, request: { text: string;
 
     const assistantId = deps.newId()
     const createdAt = deps.now()
-    const reply = await deps.callModel({
+    const reply: ModelReply = step === 1 && deps.initialWebCall ? {
+      content: `<tool_call>${JSON.stringify(deps.initialWebCall).replace(/</g, '\\u003c')}</tool_call>`,
+      aborted: false,
+      stoppedForRepetition: false,
+    } : await deps.callModel({
       assistantId,
-      messages: [{ role: 'system', content: deps.systemPrompt(conversation) }, ...agentHistory(conversation.messages)],
+      messages: [{ role: 'system', content: answerOnly ? sourceAnswerPrompt : deps.systemPrompt(conversation) }, ...agentHistory(conversation.messages)],
       pinned: [...(conversation.pinned ?? []), ...(task ? [`Task: ${task}`] : [])],
     })
     const { content, reasoning } = normalizeReply(reply)
     const segments = parseAgentText(content, { final: true })
-    const toolSegments = segments.filter((s): s is ToolSegment => s.kind === 'tool')
+    const toolSegments = (answerOnly ? [] : segments).filter((s): s is ToolSegment => s.kind === 'tool')
     const hasText = segments.some((s) => s.kind === 'text')
     const calls: ToolCall[] = toolSegments.map((segment) => {
       const name = canonicalToolName(segment.name)
@@ -261,7 +270,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, request: { text: string;
     const stepMessage: ChatMessage = {
       id: assistantId,
       role: 'assistant',
-      content,
+      content: answerOnly ? segments.flatMap((segment) => segment.kind === 'text' ? [segment.text] : []).join('\n').trim() : content,
       createdAt,
       ...(reasoning ? { reasoning, ...(reply.reasoningMs !== undefined ? { reasoningMs: reply.reasoningMs } : {}) } : {}),
       ...(reply.stats ? { stats: reply.stats } : {}),
@@ -300,6 +309,11 @@ export async function runAgentLoop(deps: AgentLoopDeps, request: { text: string;
         deps.appendMessage(stepMessage)
         return { outcome: 'done', steps: step }
       }
+      if (answerOnly) {
+        const note = 'The source was retrieved, but the model did not produce an explanation.'
+        deps.appendMessage({ ...stepMessage, error: note })
+        return { outcome: 'error', steps: step, note }
+      }
       // Nothing at all: said once, plainly, then the run ends if it happens again.
       emptySteps++
       deps.appendMessage(stepMessage)
@@ -326,6 +340,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, request: { text: string;
     let validCalls = 0
     let declined = false
     let stuck = false
+    let stopReason: string | undefined
     for (const [index, call] of calls.entries()) {
       const segment = toolSegments[index]!
       if (deps.signal.aborted) {
@@ -358,18 +373,28 @@ export async function runAgentLoop(deps: AgentLoopDeps, request: { text: string;
       const outcome = await runOneCall(deps, assistantId, call, segment, step)
       outputs.push(outcome.output)
       if (outcome.counted) validCalls++
+      if (outcome.readSource) hasSource = true
       if (outcome.declined) declined = true
+      if (outcome.stopReason) {
+        stopReason = outcome.stopReason
+        break
+      }
     }
     deps.appendMessage({ id: deps.newId(), role: 'user', content: toolResultsMessage(outputs), toolResults: true, createdAt: deps.now() })
     deps.updateConversation(() => ({ updatedAt: deps.now() }))
 
     if (deps.signal.aborted) return { outcome: 'stopped', steps: step }
+    if (stopReason) return { outcome: 'error', steps: step, note: stopReason }
+    emptySteps = !hasText && validCalls === 0 ? emptySteps + 1 : 0
+    if (hasSource && (deps.answerAfterSource || stuck || emptySteps >= 2)) {
+      answerOnly = true
+      continue
+    }
     if (stuck) {
       const note = 'The agent kept making the same call, so it was stopped. Send a message to steer it.'
       patchMessage(deps, assistantId, { error: note })
       return { outcome: 'stuck', steps: step, note }
     }
-    emptySteps = !hasText && validCalls === 0 ? emptySteps + 1 : 0
     if (emptySteps >= 2) {
       const note = 'The model made no usable tool call twice in a row, so the agent stopped.'
       patchMessage(deps, assistantId, { error: note })
@@ -389,7 +414,7 @@ async function runOneCall(
   call: ToolCall,
   segment: ToolSegment,
   step: number,
-): Promise<{ output: string; counted: boolean; declined?: boolean }> {
+): Promise<{ output: string; counted: boolean; declined?: boolean; stopReason?: string; readSource?: boolean }> {
   const conversation = deps.getConversation()
   const prepared = await prepareCall(
     { name: call.name, args: segment.args },
@@ -398,7 +423,7 @@ async function runOneCall(
   if (prepared.kind === 'settled') {
     const outcome = prepared.outcome
     patchCall(deps, messageId, call.id, settledPatch(outcome, deps.now()))
-    return { output: outcome.output, counted: outcome.status === 'done' }
+    return { output: outcome.output, counted: outcome.status === 'done', stopReason: outcome.stopRun ? outcome.error : undefined }
   }
 
   if (prepared.approval === 'ask') {
@@ -416,7 +441,7 @@ async function runOneCall(
       return { output: STOPPED, counted: false }
     }
     if (answer === 'deny') {
-      const what = prepared.toolKind === 'command' ? 'command' : 'edit'
+      const what = prepared.toolKind === 'browser_action' ? 'browser click' : prepared.toolKind
       patchCall(deps, messageId, call.id, { status: 'denied', finishedAt: deps.now() })
       return {
         output: `The user declined this ${what}, so it was not run. Do not try it again as it was: change your approach, or ask the user what they want.`,
@@ -424,7 +449,7 @@ async function runOneCall(
         declined: true,
       }
     }
-    if (answer === 'always' && prepared.toolKind !== 'read') deps.allow(prepared.toolKind)
+    if (answer === 'always' && (prepared.toolKind === 'command' || prepared.toolKind === 'edit')) deps.allow(prepared.toolKind)
   }
 
   patchCall(deps, messageId, call.id, { status: 'running', summary: prepared.summary, args: compactArgs(prepared.args), startedAt: deps.now() })
@@ -434,7 +459,12 @@ async function runOneCall(
     const change = outcome.change
     deps.updateConversation((c) => ({ changes: recordChange(c.changes, change, deps.now()) }))
   }
-  return { output: outcome.output, counted: true }
+  return {
+    output: outcome.output,
+    counted: true,
+    stopReason: outcome.stopRun ? outcome.error : undefined,
+    readSource: call.name === 'web_source' && outcome.status === 'done',
+  }
 }
 
 function settledPatch(outcome: ToolOutcome, now: number): Partial<ToolCall> {

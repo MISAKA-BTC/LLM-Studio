@@ -322,19 +322,32 @@ export const useStudio = create<StudioState>()(
           return
         }
         const token = ++latestModelLoad
+        const conversationId = get().activeConversationId
         // Commit the choice before touching the engine. A failed load must never undo it.
         set((s) => ({
           preferredModelId: id,
           loadingModelId: id,
           modelLoadErrors: { ...s.modelLoadErrors, [id]: '' },
-          conversations: s.conversations.map((c) => c.id === s.activeConversationId ? { ...c, modelId: id } : c),
+          conversations: s.conversations.map((c) => c.id === conversationId ? { ...c, modelId: id } : c),
         }))
         const load = async () => {
           if (token !== latestModelLoad) return
           try {
             const runtime = await api.loadModel(id, contextSize)
             if (token !== latestModelLoad) return
-            set({ runtime })
+            const selected = runtime.model_id
+            if (selected && selected !== id) {
+              set((s) => ({
+                runtime,
+                preferredModelId: selected,
+                conversations: s.conversations.map((c) =>
+                  c.id === conversationId && c.modelId === id ? { ...c, modelId: selected } : c,
+                ),
+              }))
+              get().toast('info', `対応する GGUF 版（${selected}）に切り替えました。`)
+            } else {
+              set({ runtime })
+            }
             if (runtime.offload_note) get().toast('info', runtime.offload_note)
           } catch (error) {
             if (token !== latestModelLoad) return

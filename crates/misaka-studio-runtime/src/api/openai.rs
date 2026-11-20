@@ -170,10 +170,7 @@ async fn ensure_loaded(state: &Arc<AppState>, requested: Option<String>) -> Resu
     let current = state.loaded().await.map(|s| s.model.id);
     match (requested, current) {
         (Some(want), Some(have)) if want == have => Ok(have),
-        (Some(want), _) => {
-            state.load(&want, None).await?;
-            Ok(want)
-        }
+        (Some(want), _) => state.load(&want, None).await?.model_id.ok_or(Error::NoModelLoaded),
         (None, Some(have)) => Ok(have),
         (None, None) => Err(Error::NoModelLoaded),
     }

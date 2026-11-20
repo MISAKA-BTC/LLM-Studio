@@ -464,6 +464,95 @@ impl Draft {
     }
 }
 
+/// Recover a chat whose required messages still overflow after history management.
+pub(crate) fn compact_required_chat(
+    messages: &[ChatMessage],
+    pinned: &[String],
+    window: u64,
+    max_tokens: u64,
+    byte_budget: usize,
+    counter: &TokenCounter,
+) -> Option<ContextPlan> {
+    let latest_user = messages.iter().rposition(|m| m.role == "user")?;
+    let is_tool = |m: &ChatMessage| m.content.trim_start().starts_with("<tool_response>");
+    let latest = &messages[latest_user];
+    let anchor = if is_tool(latest) {
+        messages[..latest_user].iter().rposition(|m| m.role == "user" && !is_tool(m)).unwrap_or(latest_user)
+    } else {
+        latest_user
+    };
+    let question = &messages[anchor];
+    let partial = messages.last().filter(|m| m.role == "assistant");
+    let system = messages.iter().filter(|m| m.role == "system").map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n\n");
+    let has_followup = anchor != latest_user || partial.is_some();
+    let question_cap = if has_followup { byte_budget / 2 } else { byte_budget };
+    let question_text = compact_text(&question.content, question_cap);
+    let mut remaining = byte_budget - question_text.len();
+    let mut compacted = Vec::new();
+    let system_cap = if has_followup { remaining / 2 } else { remaining };
+    if !system.is_empty() && system_cap >= 64 {
+        let system = compact_text(&system, system_cap.min(byte_budget / 2));
+        remaining -= system.len();
+        compacted.push(ChatMessage::new("system", system));
+    }
+    compacted.push(ChatMessage::new("user", question_text.clone()));
+    if anchor != latest_user && remaining >= 64 {
+        // Merge the results into one tool envelope before cutting excerpts.
+        let inner = latest.content.replace("<tool_response>", "").replace("</tool_response>", "\n");
+        let open = "<tool_response>\n";
+        let close = "\n</tool_response>";
+        let cap = remaining.saturating_sub(open.len() + close.len());
+        let inner = compact_text(inner.trim(), if partial.is_some() { cap / 2 } else { cap });
+        let tool = format!("{open}{inner}{close}");
+        remaining -= tool.len();
+        compacted.push(ChatMessage::new("user", tool));
+    }
+    if let Some(partial) = partial.filter(|_| remaining >= 64) {
+        let suffix = &partial.content[char_boundary(&partial.content, partial.content.len().saturating_sub(remaining), true)..];
+        compacted.push(ChatMessage::new("assistant", suffix));
+    }
+    let answer_reserve = answer_room(max_tokens, window);
+    let report = ContextReport {
+        managed: true,
+        backend: "llamacpp".to_string(),
+        window,
+        answer_reserve,
+        prompt_budget: window.saturating_sub(answer_reserve),
+        prompt_tokens: counter.messages(&compacted),
+        counter: counter.source().clone(),
+        pinned_included: 0,
+        pinned_omitted: pinned.len(),
+        recent_messages: 0,
+        older_messages: messages[..anchor].iter().filter(|m| m.role != "system").count(),
+        memory: None,
+        continuation: partial.is_some(),
+        question_over_budget: question_text != question.content,
+        sent: Some(compacted.clone()),
+    };
+    Some(ContextPlan { messages: compacted, report })
+}
+
+fn compact_text(text: &str, cap: usize) -> String {
+    const OMITTED: &str = "\n[… omitted …]\n";
+    if text.len() <= cap {
+        return text.to_owned();
+    }
+    if cap <= OMITTED.len() {
+        return text[..char_boundary(text, cap, false)].to_owned();
+    }
+    let room = cap - OMITTED.len();
+    let head = char_boundary(text, room * 2 / 3, false);
+    let tail = char_boundary(text, text.len() - (room - head), true);
+    format!("{}{OMITTED}{}", &text[..head], &text[tail..])
+}
+
+fn char_boundary(text: &str, mut index: usize, forward: bool) -> usize {
+    while !text.is_char_boundary(index) {
+        index = if forward { index + 1 } else { index - 1 };
+    }
+    index
+}
+
 /// The longest prefix of `text`'s lines that fits `budget` tokens, or `None` when not even one does.
 fn fit_lines(text: &str, budget: u64, counter: &TokenCounter) -> Option<String> {
     let mut out = String::new();
@@ -799,5 +888,31 @@ mod tests {
             let text = extract_memory(older, budget, &counter, true);
             assert!(counter.text(&text) <= budget, "budget {budget}: {text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod required_chat_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_tool_results_keep_the_question_and_one_complete_envelope() {
+        let question = "マイクラを Java で遊ぶにはどれを買えばいい？";
+        let tool_data = format!("<tool_response>開始{}終了</tool_response>", "漢".repeat(5000));
+        let messages = [
+            ChatMessage::new("system", "回答は日本語で書いてください。"),
+            ChatMessage::new("user", question),
+            ChatMessage::new("assistant", "調べます。"),
+            ChatMessage::new("user", tool_data),
+        ];
+        let plan = compact_required_chat(&messages, &[], 8192, 1024, 5000, &TokenCounter::estimate()).unwrap();
+        assert_eq!(plan.messages[0], messages[0]);
+        assert_eq!(plan.messages[1], messages[1]);
+        let tool = &plan.messages[2].content;
+        assert!(tool.starts_with("<tool_response>\n開始"));
+        assert!(tool.ends_with("終了\n</tool_response>"));
+        assert!(tool.contains("[… omitted …]"));
+        assert!(plan.messages.iter().map(|m| m.content.len()).sum::<usize>() <= 5000);
+        assert_eq!(plan.report.sent.as_ref(), Some(&plan.messages));
     }
 }

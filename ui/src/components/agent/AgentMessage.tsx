@@ -29,7 +29,11 @@ type CardStatus = ToolCall['status'] | 'preparing' | 'cut_off' | 'interrupted'
 
 const META: Record<string, { icon: IconName; base: string; doing: string; done: string; quiet: boolean }> = {
   web_search: { icon: 'globe', base: 'Search Web', doing: 'Searching Web', done: 'Searched Web', quiet: false },
+  web_source: { icon: 'globe', base: 'Inspect source', doing: 'Inspecting source', done: 'Inspected source', quiet: false },
   web_fetch: { icon: 'globe', base: 'Read page', doing: 'Reading page', done: 'Read page', quiet: false },
+  browser_open: { icon: 'globe', base: 'Open page', doing: 'Opening browser page', done: 'Opened browser page', quiet: false },
+  browser_read: { icon: 'globe', base: 'Read browser', doing: 'Reading browser', done: 'Read browser', quiet: false },
+  browser_click: { icon: 'globe', base: 'Click', doing: 'Clicking', done: 'Clicked', quiet: false },
   list_files: { icon: 'folder', base: 'List', doing: 'Listing', done: 'Listed', quiet: true },
   read_file: { icon: 'fileText', base: 'Read', doing: 'Reading', done: 'Read', quiet: true },
   search: { icon: 'search', base: 'Search', doing: 'Searching', done: 'Searched', quiet: true },
@@ -59,7 +63,9 @@ function verbFor(meta: typeof UNKNOWN_META, status: CardStatus, created: boolean
 function targetOf(name: string, args: Record<string, unknown>): ReactNode {
   switch (name) {
     case 'web_search': return argText(args, 'query')
-    case 'web_fetch': return argText(args, 'url')
+    case 'web_source':
+    case 'web_fetch':
+    case 'browser_open': return argText(args, 'url')
     case 'list_files': {
       const path = cleanPath(argText(args, 'path'))
       return path && path !== '.' ? path : <span className="font-sans">the workspace</span>
@@ -278,7 +284,8 @@ function ApprovalBar({ call, name, created }: { call: ToolCall; name: string; cr
     if (!isTypingTarget(document.activeElement)) bar.focus({ preventScroll: true })
   }, [])
   const command = name === 'run_command'
-  const question = command
+  const browser = name === 'browser_click'
+  const question = browser ? 'Allow this browser click?' : command
     ? `Run this command${workspace ? ` in ${folderName(workspace)}` : ''}?`
     : name === 'write_file'
       ? created
@@ -292,7 +299,7 @@ function ApprovalBar({ call, name, created }: { call: ToolCall; name: string; cr
       role="group"
       aria-label={question}
       onKeyDown={(event) => {
-        if (event.key !== 'Enter' || event.target !== event.currentTarget || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+        if (browser || event.key !== 'Enter' || event.target !== event.currentTarget || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
         if (event.nativeEvent.isComposing) return
         event.preventDefault()
         resolveApproval(call.id, 'approve')
@@ -305,20 +312,20 @@ function ApprovalBar({ call, name, created }: { call: ToolCall; name: string; cr
       </span>
       {/* One group, so a narrow column wraps the buttons together rather than one at a time. */}
       <div className="flex shrink-0 items-center gap-1.5">
-        <button
+        {!browser && <button
           type="button"
           className="btn-ghost h-7 px-2 text-xs"
           title={`Approve this, and every ${command ? 'command' : 'edit'} after it in this thread, without asking`}
           onClick={() => resolveApproval(call.id, 'always')}
         >
           Always allow in this thread
-        </button>
+        </button>}
         <button type="button" className="btn-outline h-7 bg-white px-3 text-xs dark:bg-ink-900" onClick={() => resolveApproval(call.id, 'deny')}>
           Deny
         </button>
         <button type="button" className="btn-primary h-7 px-3 text-xs" onClick={() => resolveApproval(call.id, 'approve')}>
           Approve
-          <span className="text-[0.7rem] font-normal opacity-75">{shortcutKeys('enter').join(' ')}</span>
+          {!browser && <span className="text-[0.7rem] font-normal opacity-75">{shortcutKeys('enter').join(' ')}</span>}
         </button>
       </div>
     </div>
@@ -358,7 +365,7 @@ export function ToolCallCard({ segment, call, streaming }: { segment: ToolSegmen
     )
   }
 
-  const target = targetOf(name, args)
+  const target = name === 'browser_click' ? call?.summary : targetOf(name, args)
   const verb = verbFor(meta, status, created && name === 'write_file')
   const error = status === 'error' || status === 'denied' || status === 'interrupted' ? (status === 'interrupted' ? 'The window was reloaded before this was approved, so it did not run.' : call?.error) : null
   // Red is for what went wrong; a call the person declined or stopped is said quietly.
