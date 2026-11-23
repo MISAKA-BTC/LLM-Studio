@@ -339,11 +339,13 @@ export function Segmented<T extends string>({
   options,
   onChange,
   className = '',
+  disabled = false,
 }: {
   value: T
   options: SegmentOption<T>[]
   onChange: (value: T) => void
   className?: string
+  disabled?: boolean
 }) {
   return (
     <div className={`inline-flex items-center gap-0.5 rounded-lg bg-ink-100 p-0.5 dark:bg-ink-800 ${className}`} role="radiogroup">
@@ -353,9 +355,10 @@ export function Segmented<T extends string>({
           type="button"
           role="radio"
           aria-checked={option.value === value}
+          disabled={disabled}
           title={option.title}
           onClick={() => onChange(option.value)}
-          className={`inline-flex h-6 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors ${
+          className={`inline-flex h-6 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors disabled:opacity-50 ${
             option.value === value
               ? 'bg-white text-ink-900 shadow-sm dark:bg-ink-950 dark:text-ink-50'
               : 'text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100'

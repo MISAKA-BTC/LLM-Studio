@@ -1,4 +1,4 @@
-// Prompt mining with no node here — the reason MISAKA Studio exists.
+// Prompt mining with no node here — the reason LLM Studio exists.
 //
 // The Studio runs the free-prompt gateway (its worker answers the prompt and commits the work; it holds no key) and the
 // rail's watcher (it signs each committed job with the bond key and relays it), both pointed at the network's public

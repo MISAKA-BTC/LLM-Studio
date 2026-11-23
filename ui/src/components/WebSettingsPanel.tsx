@@ -12,7 +12,7 @@ export function WebSettingsPanel({ web, onChange, onSave }: { web: Settings['web
     try {
       await onSave()
       const result = await api.web.check()
-      setStatus(result.route === 'tor' ? `Tor exit verified by Tor Project. Exit IP: ${result.ip}` : `Direct research connection. Public IP: ${result.ip}. Citation links open in Tor Browser.`)
+      setStatus(result.route === 'tor' ? `Tor exit verified by Tor Project. Exit IP: ${result.ip}` : `Direct research connection. Public IP: ${result.ip}. Citation links open in Google Chrome.`)
     } catch (error) { setStatus((error as Error).message); setFailed(true) }
     finally { setChecking(false) }
   }
@@ -28,7 +28,7 @@ export function WebSettingsPanel({ web, onChange, onSave }: { web: Settings['web
     <Field label="Tor Browser application / launcher path" hint="Leave blank to detect the installation. On macOS select Tor Browser.app; on Windows Browser/firefox.exe; on Linux Browser/start-tor-browser.">
       <input className="input mt-1" placeholder="Auto-detect Tor Browser" value={web.tor_browser_path ?? ''} onChange={(e) => onChange({ ...web, tor_browser_path: e.target.value || null })} />
     </Field>
-    <p className="text-xs text-ink-500">For Tor mode, connect Tor Browser or start standalone Tor. The managed Chromium window uses the selected route and a separate temporary profile. Tor mode routes its page requests and DNS through Tor, while using Chromium’s browser fingerprint. Enter credentials and submit forms yourself in that window. Text research uses the selected connection without opening browser tabs. Open a citation link to view it in Tor Browser.</p>
+    <p className="text-xs text-ink-500">For Tor mode, connect Tor Browser or start standalone Tor. The managed Chromium window uses the selected route and a separate temporary profile. Tor mode routes its page requests and DNS through Tor, while using Chromium’s browser fingerprint. Enter credentials and submit forms yourself in that window. Text research uses the selected connection without opening browser tabs. Citation links open in Google Chrome in Direct mode and Tor Browser in other modes.</p>
     <button type="button" className="btn" disabled={checking || web.mode === 'off'} onClick={() => void check()}>{checking ? 'Checking…' : 'Save & test connection'}</button>
     {status && <p role="status" className={`text-xs ${failed ? 'text-red-600' : 'text-ink-600 dark:text-ink-300'}`}>{status}</p>}
   </Section>

@@ -1,4 +1,4 @@
-//! MISAKA Studio — the desktop shell.
+//! LLM Studio — the desktop shell.
 //!
 //! A native window over the same UI bundle the runtime serves, with the runtime itself supervised
 //! as a child process. The window is a client of `http://127.0.0.1:<port>`; there is no private
@@ -51,7 +51,7 @@ fn main() {
 
     let child = match &source {
         RuntimeSource::Attached(port) => {
-            eprintln!("misaka-studio: attaching to the runtime already on port {port}");
+            eprintln!("LLM Studio: attaching to the runtime already on port {port}");
             None
         }
         RuntimeSource::Spawn(port) => match spawn_runtime(*port) {
@@ -59,7 +59,7 @@ fn main() {
             Err(message) => {
                 // No window yet, so there is nowhere to show a dialog: say it on stderr and exit
                 // non-zero rather than opening a window that can never work.
-                eprintln!("misaka-studio: {message}");
+                eprintln!("LLM Studio: {message}");
                 std::process::exit(1);
             }
         },
@@ -67,7 +67,7 @@ fn main() {
 
     if child.is_some() && !wait_for_health(source.port()) {
         eprintln!(
-            "misaka-studio: the runtime did not answer on {} within {}s. \
+            "LLM Studio: the runtime did not answer on {} within {}s. \
              Run `misaka-studiod --check` to see how it is configured.",
             source.base_url(),
             STARTUP_TIMEOUT.as_secs()
@@ -92,7 +92,7 @@ fn main() {
             // assets.
             let window_url = base_url.parse().map(WebviewUrl::External).unwrap_or_else(|_| WebviewUrl::default());
             WebviewWindowBuilder::new(app, "main", window_url)
-                .title("MISAKA Studio")
+                .title(app.package_info().name.as_str())
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(880.0, 600.0)
                 // Injected before the app's own bundle runs, so `window.__MISAKA_STUDIO_API__` is
@@ -153,7 +153,7 @@ fn wait_for_health(port: u16) -> bool {
     false
 }
 
-/// The settings file the runtime uses. Kept in step with
+/// The existing settings file the runtime uses. Kept in step with
 /// `misaka_studio_core::settings::default_settings_path`.
 fn default_settings_path() -> PathBuf {
     let data_dir = if cfg!(target_os = "windows") {

@@ -15,7 +15,7 @@ import { WebChip } from './WebChip'
 import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { api } from '../../lib/api'
 import { attachmentFromText, baseName, MAX_ATTACHMENT_BYTES } from '../../lib/attachments'
-import { startAgentRun, stopAgentRun, useAgent } from '../../lib/agent/run'
+import { stopAgentRun, useAgent } from '../../lib/agent/run'
 import { bytes } from '../../lib/format'
 import { matches } from '../../lib/keys'
 import { isWebTask, webEnabled } from '../../lib/web'
@@ -42,6 +42,7 @@ import { IconButton, Kbd, Popover } from '../ui'
 import { AttachmentChip } from './AttachmentChip'
 import { attachFiles, draftKey, useComposer, useDraft } from './composerStore'
 import { downloadMarkdown } from './exportMarkdown'
+import { busyConversation, queueFollowUp, removeFollowUp, retryFollowUp, sendFromComposer, useFollowUps, useSendingIn } from './followUps'
 import { MiningChip } from './MiningChip'
 import { ModelPicker, ModelSelectionNotice } from './ModelPicker'
 
@@ -101,6 +102,8 @@ export const Composer = memo(function Composer({
   // Which thread is streaming, not what: the composer has no business redrawing for every token.
   const streamingIn = useStudio((s) => s.streaming?.conversationId ?? null)
   const agentRunIn = useAgent((s) => s.run?.conversationId ?? null)
+  const sendingIn = useSendingIn()
+  const followUps = useFollowUps(conversation?.id)
   const thinking = useUi((s) => s.thinking)
   const focusTick = useUi((s) => s.composerFocusTick)
   const composerDraft = useUi((s) => s.composerDraft)
@@ -119,8 +122,11 @@ export const Composer = memo(function Composer({
   const mode: ConversationMode = conversation ? (conversation.mode ?? 'chat') : side === 'code' ? 'agent' : 'chat'
   // Before the session exists, `@` searches the folder it will be made in.
   const workspace = mode === 'agent' ? (conversation ? (conversation.workspace ?? null) : pendingProject) : null
-  const busyHere = conversation !== null && (streamingIn === conversation.id || agentRunIn === conversation.id)
-  const busyElsewhere = !busyHere && (streamingIn !== null || agentRunIn !== null)
+  const runningIn = sendingIn ?? agentRunIn ?? streamingIn
+  const busyHere = runningIn !== null && runningIn === conversation?.id
+  const busyElsewhere = runningIn !== null && !busyHere
+  const canStop = conversation !== null && (streamingIn === conversation.id || agentRunIn === conversation.id)
+  const willQueue = busyHere || followUps.length > 0
   const offline = useSettled(!connected, 1200)
   const isCommand = parseSlash(draft.text) !== null
   const hasContent = draft.text.trim().length > 0 || draft.attachments.length > 0
@@ -248,62 +254,51 @@ export const Composer = memo(function Composer({
   // --- sending -------------------------------------------------------------------------------------
 
   const submit = async () => {
-    const text = draft.text
+    const composer = useComposer.getState()
+    const current = composer.drafts[key]
+    if (!current) return
+    const { text, attachments } = current
     const command = parseSlash(text)
     if (command) {
       runCommand(command.command, command.arg)
       return
     }
-    if (!hasContent || busyHere || busyElsewhere || !connected) return
     const studio = useStudio.getState()
-    const attachments = draft.attachments
+    const running = busyConversation()
+    if ((!text.trim() && attachments.length === 0) || !studio.connected || (running !== null && running !== conversation?.id)) return
     // Sent with the mouse, the focus is on a button that is about to become Stop; the next message
     // is typed here.
     textarea.current?.focus({ preventScroll: true })
 
-    if (isWebTask(text)) {
-      if (!webEnabled(conversation ?? undefined, studio.settings, studio.runtime?.backend)) {
-        studio.toast('info', 'Enable Web in the composer and load a local model before researching a site.')
-        return
-      }
-      if (conversation) {
-        useComposer.getState().clear(key)
-        onSend?.()
-        await startAgentRun(conversation.id, text.trim(), attachments.length ? attachments : undefined)
-        return
-      }
-    }
-
-    if (mode === 'agent') {
-      let id = conversation?.id ?? null
-      if (!id) {
-        // Code's empty page: the session is made where "New session" would make it. With no folder
-        // to go on, the picker asks for one and the draft waits on this page — the session the
-        // picker makes takes it over (`sideSync`), ready to send.
-        const project = projectForNewSession()
-        if (!project) {
-          openFolder()
-          return
-        }
-        id = studio.newConversation({ mode: 'agent', workspace: project })
-        useUi.getState().addRecentWorkspace(project)
-        useComposer.getState().move(key, id)
-      }
-      const thread = useStudio.getState().conversations.find((c) => c.id === id)
-      if (!thread?.workspace) {
-        // No folder, no agent. The draft stays where it is, to be sent once a folder is chosen.
-        useUi.getState().openWorkspacePicker(id)
-        return
-      }
-      useComposer.getState().clear(draftKey(id))
-      onSend?.()
-      await startAgentRun(id, text.trim(), attachments.length ? attachments : undefined)
+    const webTask = isWebTask(text)
+    if (webTask && !webEnabled(conversation ?? undefined, studio.settings, studio.runtime?.backend)) {
+      studio.toast('info', 'Enable Web in the composer and load a local model before researching a site.')
       return
     }
 
-    useComposer.getState().clear(key)
+    let id = conversation?.id
+    if (!id) {
+      // The folder picker carries the draft into the session it creates. When sending now,
+      // clear the captured draft before sideSync can carry it into the new thread.
+      const project = mode === 'agent' ? projectForNewSession() : null
+      if (mode === 'agent' && !project) {
+        openFolder()
+        return
+      }
+      composer.clear(key)
+      id = studio.newConversation({ mode, workspace: project })
+      if (project) useUi.getState().addRecentWorkspace(project)
+    }
+
+    if (mode === 'agent' && !webTask && conversation && !conversation.workspace) {
+      useUi.getState().openWorkspacePicker(id)
+      return
+    }
+
+    if (conversation) composer.clear(key)
     onSend?.()
-    await studio.send(text, attachments.length ? attachments : undefined)
+    if (running || followUps.length > 0) queueFollowUp(id, current)
+    else await sendFromComposer(id, current)
   }
 
   const stopHere = () => {
@@ -498,9 +493,7 @@ export const Composer = memo(function Composer({
   // --- the card ------------------------------------------------------------------------------------
 
   const placeholder = busyHere
-    ? mode === 'agent'
-      ? 'The agent is working — Esc stops it'
-      : 'Generating — Esc stops it'
+    ? 'Send a follow-up to queue it'
     : mode === 'agent'
       ? workspace
         ? 'Describe a task — @ to mention a file, / for commands'
@@ -509,6 +502,19 @@ export const Composer = memo(function Composer({
 
   return (
     <div className="w-full">
+      {conversation && followUps.length > 0 && (
+        <ul aria-label="Queued follow-ups" aria-live="polite" className="mb-2 max-h-28 space-y-1 overflow-y-auto">
+          {followUps.map((item) => (
+            <li key={item.id} className="flex items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-1 text-xs text-ink-600 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-300">
+              <Icon name="clock" className="size-3.5 shrink-0 text-ink-400" />
+              <span className="shrink-0 font-medium">{item.paused ? 'Send paused' : 'Queued'}</span>
+              <span className="min-w-0 flex-1 truncate" title={item.text}>{item.text.trim() || item.attachments.map((file) => file.name).join(', ')}</span>
+              {item.paused && <button type="button" className="chip shrink-0" onClick={() => retryFollowUp(conversation.id, item.id)}>Retry</button>}
+              <IconButton icon="x" label="Remove queued follow-up" onClick={() => removeFollowUp(conversation.id, item.id)} />
+            </li>
+          ))}
+        </ul>
+      )}
       <div
         ref={card}
         className={`@container rounded-2xl border bg-white shadow-sm transition-[border-color,box-shadow] dark:bg-ink-900 ${
@@ -597,7 +603,7 @@ export const Composer = memo(function Composer({
             <WebChip conversation={conversation} createThread={createHere} disabled={busyHere || busyElsewhere} />
             <MiningChip conversation={conversation} compact={mode === 'agent'} />
             <ModelPicker />
-            {busyHere ? (
+            {canStop && (
               <button
                 type="button"
                 className="ml-1 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-ink-900 text-white transition-colors hover:bg-ink-700 dark:bg-ink-100 dark:text-ink-900 dark:hover:bg-white"
@@ -607,14 +613,15 @@ export const Composer = memo(function Composer({
               >
                 <span className="size-2.5 rounded-[3px] bg-current" />
               </button>
-            ) : (
+            )}
+            {(!canStop || canSend) && (
               <button
                 type="button"
                 className="ml-1 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-arc-600 text-white transition-colors hover:bg-arc-500 disabled:bg-ink-200 disabled:text-ink-400 dark:disabled:bg-ink-800 dark:disabled:text-ink-500"
                 onClick={() => void submit()}
                 disabled={!canSend}
-                aria-label={isCommand ? 'Run command' : 'Send'}
-                title={isCommand ? 'Run the command (Enter)' : 'Send (Enter)'}
+                aria-label={isCommand ? 'Run command' : willQueue ? 'Queue follow-up' : 'Send'}
+                title={isCommand ? 'Run the command (Enter)' : willQueue ? 'Queue follow-up (Enter)' : 'Send (Enter)'}
               >
                 <Icon name="arrowUp" className="size-4" />
               </button>

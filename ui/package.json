@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "MISAKA Studio — the Studio UI, served by the MISAKA Runtime and wrapped by the Tauri shell",
+  "description": "LLM Studio — the Studio UI, served by the LLM Studio Runtime and wrapped by the Tauri shell",
   "license": "ISC",
   "scripts": {
     "dev": "vite",

@@ -1,4 +1,4 @@
-# MISAKA Studio
+# LLM Studio
 
 A local LLM desktop app: search Hugging Face, download a model, load it, chat with it — and serve
 an OpenAI-compatible API on `localhost` while you do. Windows, macOS and Linux. Chat runs locally;
@@ -12,7 +12,7 @@ to the prompt and the answer, derived exactly the way MISAKA consensus derives t
 ```
   Studio UI  (React — or any OpenAI client)
       │  HTTP:  /v1/…  and  /api/v1/…
-  MISAKA Runtime API              misaka-studiod
+  LLM Studio Runtime API              misaka-studiod
       │  InferenceBackend
   LLM backend                     llama.cpp · MLX · Strata (SSD experts) · MISAKA
       │
@@ -133,9 +133,10 @@ browser fingerprint. **Direct** uses the machine's normal internet connection. M
 mining and terminal commands use separate connections.
 
 Built-in text search and page fetch use the selected connection without opening browser tabs.
-Open a citation link to view it in Tor Browser. Set the Tor Browser application or launcher path
-in Settings if detection fails. Text search uses Bing with a DuckDuckGo fallback on the selected route. A site or provider
-can refuse automated or Tor traffic. Web content is untrusted evidence.
+Citation links open in Google Chrome in Direct mode and Tor Browser in other modes. Set the Tor
+Browser application or launcher path in Settings if detection fails. Text search uses Bing with a
+DuckDuckGo fallback on the selected route. A site or provider can refuse automated or Tor traffic.
+Web content is untrusted evidence.
 
 ## Working in the window
 
@@ -350,7 +351,7 @@ from a guess is worse than none.
 ## Tests
 
 ```bash
-cd misaka-studio && cargo test           # runtime and core
+cargo test                               # runtime and core, from the repository root
 npm --prefix ui run build                # typecheck + bundle
 npm --prefix ui test                     # the UI's logic: history, the agent's protocol and loop, diffs, fuzzy search…
 ```
@@ -385,7 +386,7 @@ Prepared Strata Metal MoE models can stream experts from SSD with an adaptive or
 
 ## Licensing
 
-MISAKA Studio is ISC, the same licence as the MISAKA node ([misakas](https://github.com/MISAKA-BTC/misakas)). Jan
+LLM Studio is ISC, the same licence as the MISAKA node ([misakas](https://github.com/MISAKA-BTC/misakas)). Jan
 (Apache-2.0) is the reference implementation this was designed against; llama.cpp (MIT) and MLX
 (MIT) are driven as external processes and not bundled. No closed-source application was used,
 copied or reverse-engineered. See [NOTICE](NOTICE) for the details and for what must happen if Jan

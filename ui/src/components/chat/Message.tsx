@@ -6,7 +6,7 @@
 // sits around it, small, in the order it is needed: reasoning above, notices and actions below.
 
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import misakaPi from '../../assets/misaka-pi.png'
+import studioIcon from '../../assets/llm-studio.png'
 import { duration } from '../../lib/format'
 import { splitThinking } from '../../lib/reasoning'
 import type { ChatMessage } from '../../lib/types'
@@ -192,8 +192,8 @@ function AssistantMessage({ message, agent, last, generating, live, showAvatar, 
     <div id={`message-${message.id}`} className="group flex gap-3">
       {showAvatar ? (
         <img
-          src={misakaPi}
-          alt="MISAKA"
+          src={studioIcon}
+          alt="LLM Studio"
           className="mt-0.5 size-7 shrink-0 rounded-lg bg-white object-contain p-0.5 ring-1 ring-ink-200 dark:bg-ink-100 dark:ring-ink-700"
         />
       ) : (

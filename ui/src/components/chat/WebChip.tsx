@@ -33,7 +33,7 @@ export function WebChip({ conversation, createThread, disabled }: { conversation
   }
   return <button type="button" className={`chip shrink-0 ${enabled ? 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300' : 'text-ink-500'}`}
     disabled={disabled || saving} aria-pressed={enabled} onClick={() => void toggle()}
-    title={unavailable ? 'A local model is required for Web research' : enabled ? `Web research on (${settings?.web?.mode}). Mining is off. Text research uses the selected connection. Open a citation to view it in Tor Browser.` : 'Enable Web research and turn mining off for this conversation.'}>
+    title={unavailable ? 'A local model is required for Web research' : enabled ? `Web research on (${settings?.web?.mode}). Mining is off. Text research uses the selected connection. Citations open in ${settings?.web?.mode === 'direct' ? 'Google Chrome' : 'Tor Browser'}.` : 'Enable Web research and turn mining off for this conversation.'}>
     <Icon name="globe" className="size-3.5" /><span>{saving ? '…' : enabled ? settings?.web?.mode === 'tor' ? 'Web · Tor' : 'Web · Direct' : 'Web off'}</span>
   </button>
 }

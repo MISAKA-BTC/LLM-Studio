@@ -31,7 +31,7 @@ export function conversationMarkdown(conversation: Conversation): string {
     }
     const { thinking, answer } = splitThinking(message.content)
     const reasoning = message.reasoning ?? thinking
-    out.push(`## ${message.stats?.model ?? conversation.modelId ?? 'MISAKA'}`, '')
+    out.push(`## ${message.stats?.model ?? conversation.modelId ?? 'LLM Studio'}`, '')
     if (reasoning) out.push('<details><summary>Thinking</summary>', '', reasoning.trim(), '', '</details>', '')
     if (answer.trim()) out.push(answer.trim(), '')
     for (const call of message.toolCalls ?? []) out.push(`- \`${call.name}\` ${call.summary ?? ''} — ${call.status}`.trimEnd())

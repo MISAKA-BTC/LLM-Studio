@@ -1,4 +1,4 @@
-# MISAKA Studio — design v0.1
+# LLM Studio — design v0.1
 
 **Status:** implemented and running (2026-08-28). This describes what is in this repository, the
 decisions behind it, and — as precisely as the rest — what it deliberately does not do yet.
@@ -9,7 +9,7 @@ A person with a laptop should be able to run an open-weight model without a term
 see whether it fits, download it, load it, talk to it. That is the whole product, and Jan and
 LM Studio have both shown it is achievable.
 
-MISAKA Studio has a second purpose the others do not: **it is the point at which inference becomes
+LLM Studio has a second purpose the others do not: **it is the point at which inference becomes
 evidence.** The MISAKA network ([misakas](https://github.com/MISAKA-BTC/misakas)) settles blocks by re-deriving work that a
 producer claims to have done, and every stage of that — deterministic execution, an inference
 hash, a panel verdict, compute credit — starts from knowing exactly which artifact ran under
@@ -24,7 +24,7 @@ So the Studio records it from the first version, and implements nothing else of 
   Studio UI ──────────── React bundle, served by the runtime or loaded by the shell
       │                  (also: any OpenAI-compatible client)
       │ HTTP  /v1/…  /api/v1/…
-  MISAKA Runtime API ─── misaka-studiod: model store, catalog, downloads, metrics, records
+  LLM Studio Runtime API ─── misaka-studiod: model store, catalog, downloads, metrics, records
       │ InferenceBackend (Rust trait)
   LLM backend ────────── llama.cpp (child process) · MLX (child process) · mock
       │

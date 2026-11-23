@@ -6,12 +6,14 @@
 // a file and its own instructions, and 4K does not.
 
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useAgent } from '../../lib/agent/run'
 import { bytes, tokens } from '../../lib/format'
 import { fuzzyFilter } from '../../lib/slash'
 import type { FitVerdict, ModelView } from '../../lib/types'
 import { chatModelError, chatModelId, useStudio } from '../../store/studio'
 import { FitBadge, Icon, QuantBadge, Spinner } from '../common'
 import { Popover, Segmented, StatusDot, type Placement } from '../ui'
+import { busyConversation, useSendingIn } from './followUps'
 import { offloadLabel, offloadTitle } from './offload'
 
 type ContextChoice = 'default' | '8k' | '16k' | '32k'
@@ -35,21 +37,31 @@ function shortFit(fit: FitVerdict): string {
 }
 
 /** The popover's content: filter, installed models, context size, unload, and the way to more. */
-export function ModelPickerPanel({ close }: { close: () => void }) {
+export function ModelPickerPanel({ close, contextOnly = false }: { close: () => void; contextOnly?: boolean }) {
   const models = useStudio((s) => s.models)
   const runtime = useStudio((s) => s.runtime)
   const selectedId = useStudio(chatModelId)
   const error = useStudio(chatModelError)
-  const generating = useStudio((s) => s.streaming !== null)
+  const streaming = useStudio((s) => s.streaming !== null)
+  const agentRunning = useAgent((s) => s.run !== null)
+  const sendingIn = useSendingIn()
   const loadingModelId = useStudio((s) => s.loadingModelId)
   const loadModel = useStudio((s) => s.loadModel)
   const unloadModel = useStudio((s) => s.unloadModel)
   const setView = useStudio((s) => s.setView)
+  const defaultContext = useStudio((s) => s.settings?.generation.context_size)
   const agentThread = useStudio((s) => s.conversations.find((c) => c.id === s.activeConversationId)?.mode === 'agent')
   const [query, setQuery] = useState('')
   const [context, setContext] = useState<ContextChoice>('default')
   const [active, setActive] = useState(0)
   const list = useRef<HTMLDivElement>(null)
+  const generating = streaming || agentRunning || sendingIn !== null
+  const unavailable = generating || loadingModelId !== null
+  const selectedModel = models.find((model) => model.id === selectedId && model.fit.verdict !== 'does_not_fit')
+  const loadedContext = runtime?.model_id === selectedId ? runtime?.context_size : null
+  const displayedContext = loadedContext == null
+    ? context
+    : (Object.keys(CONTEXT_SIZE) as ContextChoice[]).find((choice) => CONTEXT_SIZE[choice] === loadedContext) ?? 'default'
 
   const filtered = fuzzyFilter(query, models, (m) => `${m.id} ${m.name}`)
   useEffect(() => setActive(0), [query])
@@ -58,11 +70,20 @@ export function ModelPickerPanel({ close }: { close: () => void }) {
   }, [active])
 
   const choose = (model: ModelView) => {
-    if (generating || model.fit.verdict === 'does_not_fit') return
+    if (busyConversation() || loadingModelId !== null || model.fit.verdict === 'does_not_fit') return
     const contextSize = CONTEXT_SIZE[context]
     close()
     // Selecting a resident model must still update this chat's choice.
     void loadModel(model.id, contextSize)
+  }
+
+  const changeContext = (choice: ContextChoice) => {
+    if (busyConversation() || loadingModelId !== null) return
+    setContext(choice)
+    if (!selectedModel) return
+    // The runtime reuses a resident model when no override is sent. Resolve Default here so it can reload.
+    const contextSize = CONTEXT_SIZE[choice] ?? defaultContext ?? selectedModel.recommended_context
+    void loadModel(selectedModel.id, contextSize)
   }
 
   const smallForAgent = agentThread && runtime?.model_id && runtime.context_size !== null && runtime.context_size < AGENT_MIN_CONTEXT
@@ -70,7 +91,7 @@ export function ModelPickerPanel({ close }: { close: () => void }) {
   return (
     <div className="flex max-h-[inherit] flex-col">
       {error && <p role="alert" className="break-words px-3 py-2 text-xs text-amber-700 dark:text-amber-400">選択は保持されています。{error}</p>}
-      <div className="border-b border-ink-200 p-2 dark:border-ink-700">
+      {!contextOnly && <div className="border-b border-ink-200 p-2 dark:border-ink-700">
         <div className="flex items-center gap-2 rounded-lg bg-ink-50 px-2 dark:bg-ink-900">
           <Icon name="search" className="size-3.5 shrink-0 text-ink-400" />
           <input
@@ -96,9 +117,9 @@ export function ModelPickerPanel({ close }: { close: () => void }) {
             }}
           />
         </div>
-      </div>
+      </div>}
 
-      <div ref={list} className="min-h-0 flex-1 overflow-y-auto p-1" role="listbox" aria-label="Installed models">
+      {!contextOnly && <div ref={list} className="min-h-0 flex-1 overflow-y-auto p-1" role="listbox" aria-label="Installed models">
         {models.length === 0 && (
           <p className="px-2.5 py-3 text-xs text-ink-500 dark:text-ink-400">
             No models are installed yet. <strong>Models → Discover</strong> finds one on Hugging Face, and says what fits this machine
@@ -117,7 +138,7 @@ export function ModelPickerPanel({ close }: { close: () => void }) {
               type="button"
               role="option"
               aria-selected={selected}
-              aria-disabled={generating || unavailable}
+              aria-disabled={generating || loadingModelId !== null || unavailable}
               className="menu-item items-start"
               data-active={index === active}
               onMouseEnter={() => setActive(index)}
@@ -143,14 +164,15 @@ export function ModelPickerPanel({ close }: { close: () => void }) {
             </button>
           )
         })}
-      </div>
+      </div>}
 
-      <div className="space-y-2 border-t border-ink-200 p-2 dark:border-ink-700">
+      <div className={`space-y-2 p-2 ${contextOnly ? '' : 'border-t border-ink-200 dark:border-ink-700'}`}>
         <div className="flex items-center gap-2">
           <span className="text-[0.7rem] font-medium text-ink-600 dark:text-ink-300">Context</span>
           <Segmented<ContextChoice>
-            value={context}
-            onChange={setContext}
+            value={displayedContext}
+            onChange={changeContext}
+            disabled={unavailable}
             options={[
               { value: 'default', label: 'Default', title: 'The size set under Parameters, or the one the runtime picks for this model and machine' },
               { value: '8k', label: '8K' },
@@ -159,17 +181,20 @@ export function ModelPickerPanel({ close }: { close: () => void }) {
             ]}
           />
         </div>
-        <p className={`text-[0.65rem] leading-relaxed ${smallForAgent ? 'text-amber-700 dark:text-amber-400' : 'text-ink-500 dark:text-ink-400'}`}>
-          {smallForAgent
-            ? `The loaded window is ${tokens(runtime?.context_size)} — an agent needs 16K or more. Choose 16K or 32K, then the model, to reload it.`
-            : 'Applies when a model loads. Agent threads need 16K or more; a larger window costs memory.'}
+        <p role="status" className={`text-[0.65rem] leading-relaxed ${smallForAgent ? 'text-amber-700 dark:text-amber-400' : 'text-ink-500 dark:text-ink-400'}`}>
+          {generating ? 'コンテキストは回答が終わるか、停止すると変更できます。'
+            : loadingModelId ? 'モデルを読み込み中…'
+            : !selectedModel ? 'Choose a context size, then choose a model.'
+            : smallForAgent ? `現在は ${tokens(loadedContext)} です。Code では 16K 以上が目安です。`
+            : loadedContext != null ? `現在は ${tokens(loadedContext)} です。サイズを選ぶとモデルを再読み込みします。`
+            : 'サイズを選ぶと、そのコンテキストでモデルを読み込みます。'}
         </p>
-        <div className="flex items-center gap-1">
+        {!contextOnly && <div className="flex items-center gap-1">
           {runtime?.model_id && (
             <button
               type="button"
               className="btn-ghost px-2 py-1 text-xs"
-              disabled={generating || loadingModelId !== null}
+              disabled={unavailable}
               onClick={() => {
                 close()
                 void unloadModel()
@@ -191,7 +216,7 @@ export function ModelPickerPanel({ close }: { close: () => void }) {
             <Icon name="cube" className="size-3.5" />
             Manage models…
           </button>
-        </div>
+        </div>}
       </div>
     </div>
   )

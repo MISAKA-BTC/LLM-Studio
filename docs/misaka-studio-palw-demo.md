@@ -1,6 +1,6 @@
-# MISAKA Studio — PALW mining demonstration (2026-08-29)
+# LLM Studio — PALW mining demonstration (2026-08-29)
 
-MISAKA Studio's Network tab claims that a machine running it can join the MISAKA network:
+LLM Studio's Network tab claims that a machine running it can join the MISAKA network:
 observe a node, verify by running one, and **mine** by producing PALW blocks under a bonded
 key. Claims in a README are cheap. This document records the run that backed them — what was
 demonstrated, on what chain, with the exact commands, and precisely what was *not*

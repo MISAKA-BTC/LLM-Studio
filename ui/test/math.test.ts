@@ -71,7 +71,7 @@ test('a bare formula and a model-written $…$ formula in the same reply are bot
 // What must NOT be wrapped: ordinary words, isolated letters and numbers with no signal, code, and
 // point labels that assert nothing on their own.
 test('ordinary prose, lone letters and numbers, and unmarked point labels are left alone', () => {
-  assert.equal(normalizeMathDelimiters('This is the MISAKA Studio mock runtime.'), 'This is the MISAKA Studio mock runtime.')
+  assert.equal(normalizeMathDelimiters('This is the LLM Studio mock runtime.'), 'This is the LLM Studio mock runtime.')
   assert.equal(normalizeMathDelimiters("it's a model's answer, not the engine's"), "it's a model's answer, not the engine's")
   assert.equal(normalizeMathDelimiters('点 A から Q に引いた接線は 2 本ある'), '点 A から Q に引いた接線は 2 本ある')
   assert.equal(normalizeMathDelimiters('the file is 1.7 GiB, M4 Pro で動く'), 'the file is 1.7 GiB, M4 Pro で動く')

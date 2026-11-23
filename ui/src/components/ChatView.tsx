@@ -26,6 +26,7 @@ import { ChatHeader } from './chat/ChatHeader'
 import { Composer } from './chat/Composer'
 import { attachFiles, draftKey } from './chat/composerStore'
 import { EmptyHero } from './chat/EmptyHero'
+import { busyConversation, useSendingIn } from './chat/followUps'
 import { Message, type LiveStream, type TranscriptActions } from './chat/Message'
 import { ParametersDrawer } from './chat/ParametersDrawer'
 import { RightPanel } from './chat/RightPanel'
@@ -39,9 +40,8 @@ const BOTTOM_EPSILON_PX = 2
  * second request would take the overlay from the first, whose answer would then never be committed.
  */
 function busyElsewhere(conversationId: string): boolean {
-  const streaming = useStudio.getState().streaming
-  const run = useAgent.getState().run
-  return (streaming !== null && streaming.conversationId !== conversationId) || (run !== null && run.conversationId !== conversationId)
+  const busy = busyConversation()
+  return busy !== null && busy !== conversationId
 }
 
 /** The index of the last message the person typed (not a tool result), or -1. */
@@ -61,6 +61,7 @@ export function ChatView() {
   const conversation = useStudio((s) => s.conversations.find((c) => c.id === s.activeConversationId) ?? null)
   const streaming = useStudio((s) => s.streaming)
   const agentRun = useAgent((s) => s.run)
+  const sendingIn = useSendingIn()
 
   const messages = conversation?.messages ?? NO_MESSAGES
   const activeStream = conversation && streaming?.conversationId === conversation.id ? streaming : null
@@ -74,7 +75,7 @@ export function ChatView() {
   // A tool result is history the agent sends back to the model, not something the person wrote.
   const rows = visibleMessages.filter((m) => m.role !== 'system' && !(m.role === 'user' && m.toolResults))
   const agent = conversation?.mode === 'agent'
-  const generating = activeStream !== null || (conversation !== null && agentRun?.conversationId === conversation.id)
+  const generating = activeStream !== null || (conversation !== null && (agentRun?.conversationId === conversation.id || sendingIn === conversation.id))
   const empty = rows.length === 0
 
   // A Code session's git status and panes follow what its agent and the window do.

@@ -12,7 +12,7 @@
 // after it is refused.
 
 import type { ReactNode } from 'react'
-import logo from '../../assets/misaka-logo.png'
+import logo from '../../assets/llm-studio.png'
 import { AGENT_GOOD_CONTEXT, contextTooSmall } from '../../lib/agent/run'
 import { useWorkspaceInfo } from '../../lib/agent/workspace'
 import type { Conversation } from '../../lib/types'
@@ -217,7 +217,7 @@ export function EmptyHero({ conversation, children }: { conversation: Conversati
       <div className="w-full max-w-[760px]">
         <div className="mb-6 flex flex-col items-center text-center">
           <img src={logo} alt="" className="h-8 w-auto" />
-          <h1 className="mt-4 text-xl font-semibold tracking-tight text-ink-900 dark:text-ink-50">{code ? 'What should we build?' : 'Ask MISAKA anything'}</h1>
+          <h1 className="mt-4 text-xl font-semibold tracking-tight text-ink-900 dark:text-ink-50">{code ? 'What should we build?' : 'Ask LLM Studio anything'}</h1>
 
           {code && <ProjectChip conversation={conversation} root={project} />}
 

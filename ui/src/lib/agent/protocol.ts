@@ -249,11 +249,11 @@ export function buildSystemPrompt(context: AgentPromptContext): string {
   const rules = (context.policy === 'read_only' ? READ_ONLY_RULES : RULES).map((rule) => `- ${rule}`).join('\n')
 
   if (context.webOnly) {
-    return [toolBlock, `You are MISAKA Studio, a local research assistant. Today is ${context.date}. Reply in the user's language.`, context.web ? WEB_RULES : 'Web research is currently disabled. Do not make tool calls or claim to have browsed.', context.web && context.browser ? BROWSER_RULES : '', context.userInstructions ?? ''].filter(Boolean).join('\n\n')
+    return [toolBlock, `You are LLM Studio, a local research assistant. Today is ${context.date}. Reply in the user's language.`, context.web ? WEB_RULES : 'Web research is currently disabled. Do not make tool calls or claim to have browsed.', context.web && context.browser ? BROWSER_RULES : '', context.userInstructions ?? ''].filter(Boolean).join('\n\n')
   }
   const parts = [
     toolBlock,
-    'You are MISAKA Agent, a coding agent running locally in MISAKA Studio, on the user\'s own machine. You help with the code in one folder by using the functions above. Reply in the language the user writes in.',
+    'You are the LLM Studio coding agent. You run locally on the user\'s machine and use the tools above to help with code in one folder. Reply in the language the user writes in.',
     `# Workspace\n${where}\n${POLICY_TEXT[context.policy]}`,
     `# Rules\n${rules}`,
   ]

@@ -1,6 +1,6 @@
 // The provenance panel: which artifact answered, under which runtime.
 //
-// This is the part of MISAKA Studio that no other local-LLM app has, and it is deliberately shown
+// This is the part of LLM Studio that no other local-LLM app has, and it is deliberately shown
 // rather than logged. `h_M` and `h_R` are the same identities the chain derives, so what is on
 // screen here is exactly what a validator would compute for the same model and engine — and the
 // path from "an answer appeared" to "an answer that can be checked" starts with the user being

@@ -24,7 +24,7 @@ python server.py --port 8600 --mock
 ```
 
 Skips importing `torch`/`diffusers` entirely and answers every `/generate` with a
-placeholder PNG. This is what MISAKA Studio's own plumbing (spawn, health check, load,
+placeholder PNG. This is what LLM Studio's own plumbing (spawn, health check, load,
 generate, and the UI panel) can be verified against without any downloaded weights or a
 GPU. Point `image_backend.python_path`/`diffusion_server_path` at a wrapper that adds
 `--mock`, or set `MISAKA_DIFFUSION_MOCK=1` in the environment the Studio spawns this

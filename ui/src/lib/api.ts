@@ -1,5 +1,5 @@
 import type { SourceQuery } from './web'
-// The client for the MISAKA Runtime API.
+// The client for the LLM Studio Runtime API.
 //
 // One rule runs through this file: **the UI is an ordinary client of the public API.** Chat goes
 // through `/v1/chat/completions` exactly as a third-party OpenAI client would, so the endpoint

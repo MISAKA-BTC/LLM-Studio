@@ -312,7 +312,7 @@ impl Session {
             return Err(Error::bad_request("The browser could not load the page."));
         }
         let world = self
-            .page("Page.createIsolatedWorld", json!({ "frameId": field(frame, "id")?, "worldName": "MISAKA Studio observation" }))
+            .page("Page.createIsolatedWorld", json!({ "frameId": field(frame, "id")?, "worldName": "LLM Studio observation" }))
             .await?;
         let context = world["executionContextId"].as_i64().ok_or_else(|| Error::bad_request("The page is still loading."))?;
         let value = self.evaluate(context, include_str!("snapshot.js").to_owned()).await?;

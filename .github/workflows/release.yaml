@@ -129,9 +129,9 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $stage = "dist/misaka-studio-$version-x64-portable"
+          $stage = "dist/llm-studio-$version-x64-portable"
           New-Item -ItemType Directory -Force -Path "$stage/resources" | Out-Null
-          Copy-Item target/release/misaka-studio.exe "$stage/"
+          Copy-Item target/release/misaka-studio.exe "$stage/llm-studio.exe"
           Copy-Item desktop/src-tauri/resources/misaka-studiod.exe "$stage/resources/"
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
           Remove-Item -Recurse -Force $stage
@@ -139,7 +139,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: misaka-studio-${{ runner.os }}
+          name: llm-studio-${{ runner.os }}
           path: dist/*
           if-no-files-found: error
 
@@ -169,8 +169,8 @@ jobs:
               *Run anyway*.
             * **macOS** — Gatekeeper refuses the app. Right-click it → *Open*, then confirm.
 
-            **Windows without installing**: `misaka-studio-*-x64-portable.zip` is the same two
-            binaries in a folder. Unzip it anywhere and run `misaka-studio.exe`; keep `resources/`
+            **Windows without installing**: `llm-studio-*-x64-portable.zip` is the same two
+            binaries in a folder. Unzip it anywhere and run `llm-studio.exe`; keep `resources/`
             beside it, which is where the app looks for its runtime. No admin, no installer.
 
             Chat needs an inference engine the Studio does not bundle. Open Settings → Backend

@@ -14,7 +14,7 @@
 // only be brought back with a shortcut is one a person who never learnt the shortcut loses.
 
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import logo from '../assets/misaka-logo.png'
+import logo from '../assets/llm-studio.png'
 import { useAgent } from '../lib/agent/run'
 import { useWorkspaceInfo } from '../lib/agent/workspace'
 import { formatShortcut } from '../lib/keys'
@@ -113,7 +113,7 @@ function ExpandedSidebar() {
         {/* The project's own mark, not a letter in a box. It carries its own colour in both
             themes, so it is drawn at its native aspect rather than cropped into a square. */}
         <img src={logo} alt="" className="h-6 w-auto shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-[0.85rem] font-semibold tracking-tight">MISAKA Studio</span>
+        <span className="min-w-0 flex-1 truncate text-[0.85rem] font-semibold tracking-tight">LLM Studio</span>
         <IconButton icon="panelLeft" label="Collapse sidebar" shortcut={SHORTCUTS.toggleSidebar} onClick={toggleSidebar} />
       </div>
 
@@ -807,7 +807,7 @@ function ConnectionStatus({ compact = false }: { compact?: boolean }) {
   const connected = useStudio((s) => s.connected)
   const modelId = useStudio((s) => s.runtime?.model_id ?? null)
   const text = connected ? (modelId ? 'Model loaded' : 'Runtime ready') : 'Runtime unreachable'
-  const title = connected ? (modelId ? `Model loaded: ${modelId}` : 'Runtime ready — no model loaded') : 'The MISAKA Runtime is not answering; what the window shows may be stale'
+  const title = connected ? (modelId ? `Model loaded: ${modelId}` : 'Runtime ready — no model loaded') : 'The LLM Studio Runtime is not answering; what the window shows may be stale'
   if (compact) {
     return (
       <span className="flex size-7 items-center justify-center" title={title} role="status" aria-label={text}>

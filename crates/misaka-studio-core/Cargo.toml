@@ -1,6 +1,6 @@
 [package]
 name = "misaka-studio-core"
-description = "MISAKA Studio domain core: GGUF metadata, quantization, hardware fit, provenance identities"
+description = "LLM Studio domain core: GGUF metadata, quantization, hardware fit, provenance identities"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

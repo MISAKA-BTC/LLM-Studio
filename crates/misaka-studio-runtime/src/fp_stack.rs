@@ -1,4 +1,4 @@
-//! **Prompt mining with no node here** — the reason MISAKA Studio exists.
+//! **Prompt mining with no node here** — the reason LLM Studio exists.
 //!
 //! A prompt is mined when one inference both answers it and commits the work (ADR-0044), and that commitment reaches the
 //! chain as a signed carrier. Before RFC-0009 that needed a node on this machine. Now it needs two processes that talk to

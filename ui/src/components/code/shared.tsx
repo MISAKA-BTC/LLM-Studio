@@ -112,7 +112,7 @@ export function NeedsRuntime({ title, children }: { title: string; children?: Re
       <div className="min-w-0">
         <p className="font-medium text-ink-700 dark:text-ink-200">{title}</p>
         <p className="mt-0.5 leading-relaxed text-ink-500 dark:text-ink-400">
-          {children ?? 'This needs the updated runtime. Restart MISAKA Studio once it is installed; everything else here keeps working.'}
+          {children ?? 'This needs the updated runtime. Restart LLM Studio once it is installed; everything else here keeps working.'}
         </p>
       </div>
     </div>

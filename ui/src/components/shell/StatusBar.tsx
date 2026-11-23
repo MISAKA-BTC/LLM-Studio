@@ -14,7 +14,8 @@ import type { Offload } from '../../lib/types'
 import { chatModelId, useStudio } from '../../store/studio'
 import { useUi } from '../../store/ui'
 import { Icon, Spinner, Toggle } from '../common'
-import { Kbd, MenuItem, MenuLabel, MenuSeparator, Popover, StatusDot } from '../ui'
+import { ModelPickerPanel } from '../chat/ModelPicker'
+import { Kbd, MenuItem, MenuLabel, MenuSeparator, Popover, PopoverButton, StatusDot } from '../ui'
 import { goTo, openSidePanel, openThread, setMiningMode, setPromptStack } from './actions'
 import { useGitStatus } from '../code/gitStore'
 import { MINING_MODE_LABEL, refreshMiningState, useMiningSummary, type MiningSummary } from './mining'
@@ -113,9 +114,16 @@ function RuntimeSegment() {
         )
       )}
       {runtime?.model_id === selectedId && runtime?.context_size && (
-        <span className={`hidden md:inline-flex ${box}`} title="Context window">
-          {tokens(runtime.context_size)} ctx
-        </span>
+        <PopoverButton
+          className={`hidden md:inline-flex ${box} ${hover}`}
+          title="コンテキストサイズを変更"
+          label={`${tokens(runtime.context_size)} ctx — コンテキストサイズを変更`}
+          placement="top-start"
+          panelClassName="w-72 p-0"
+          button={<>{tokens(runtime.context_size)} ctx <Icon name="chevronDown" className="size-3 opacity-60" /></>}
+        >
+          {(close) => <ModelPickerPanel close={close} contextOnly />}
+        </PopoverButton>
       )}
       {runtime?.model_id === selectedId && runtime?.offload && (
         <span

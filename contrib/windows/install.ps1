@@ -1,4 +1,4 @@
-# MISAKA Studio — build and run from source on Windows, in one command.
+# LLM Studio — build and run from source on Windows, in one command.
 #
 # For the person who wants to BUILD. Anyone who only wants to RUN should take the installer from
 # the Releases page instead: it carries a compiled runtime and needs none of this.
@@ -8,14 +8,14 @@
 # of those is a place to stop. This does the same steps in an order that cannot be got wrong, and
 # says which one failed when one does.
 #
-#   irm https://raw.githubusercontent.com/MISAKA-BTC/MISAKA-Studio/main/contrib/windows/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/MISAKA-BTC/LLM-Studio/main/contrib/windows/install.ps1 | iex
 #
 # Or, having cloned already:  .\contrib\windows\install.ps1
 
 [CmdletBinding()]
 param(
     # Where to clone. Ignored when run from inside a checkout.
-    [string] $Path = "$HOME\MISAKA-Studio",
+    [string] $Path = "$HOME\LLM-Studio",
     # Build only; do not start the app afterwards.
     [switch] $NoRun,
     # Skip the toolchain step for a machine that already has Rust, Node and Git.
@@ -60,7 +60,7 @@ function Install-Prerequisite([string] $Command, [string] $WingetId, [string] $H
     }
 }
 
-Write-Host "MISAKA Studio — Windows setup" -ForegroundColor White
+Write-Host "LLM Studio — Windows setup" -ForegroundColor White
 
 if (-not $SkipPrerequisites) {
     Update-PathFromRegistry
@@ -97,7 +97,7 @@ $repoRoot = if (Test-Path (Join-Path $PSScriptRoot '..\..\Cargo.toml')) {
 } else {
     if (-not (Test-Path $Path)) {
         Step "Cloning into $Path"
-        git clone https://github.com/MISAKA-BTC/MISAKA-Studio.git $Path
+        git clone https://github.com/MISAKA-BTC/LLM-Studio.git $Path
     } else {
         Step "Updating $Path"
         git -C $Path pull --ff-only

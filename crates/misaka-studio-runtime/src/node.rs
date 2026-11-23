@@ -1,6 +1,6 @@
 //! **The chain, read through the network's public wRPC nodes** — the Studio runs no node.
 //!
-//! MISAKA Studio mines over the RFC-0009 node-free path: the gateway, the rail and the remote miner talk to public nodes,
+//! LLM Studio mines over the RFC-0009 node-free path: the gateway, the rail and the remote miner talk to public nodes,
 //! and so does this module, for the status the Network tab shows. Every fact read here is one node's word
 //! (`UNVERIFIED_REMOTE_STATE`), shown as such; nothing here signs, submits or decides.
 //!

@@ -322,7 +322,7 @@ async fn client_for(web: &WebSettings, url: &Url) -> Result<Client> {
         .referer(false)
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(35))
-        .user_agent("Mozilla/5.0 (compatible; MISAKAStudio/0.1; text research)");
+        .user_agent("Mozilla/5.0 (compatible; LLMStudio/0.1; text research)");
     if web.mode == WebMode::Tor {
         // socks5h delegates destination DNS to the proxy. Do not call lookup_host
         // on this branch. no_proxy above disables HTTP_PROXY/NO_PROXY bypasses.
@@ -521,12 +521,52 @@ async fn browser(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
 }
 
 async fn open(State(state): State<Arc<AppState>>, Json(body): Json<FetchBody>) -> Result<Json<serde_json::Value>> {
-    // A user clicking a citation opens Tor Browser even when automated research is off.
     let web = state.settings.read().await.web.clone();
     let url = Url::parse(&body.url).map_err(|_| Error::bad_request("Invalid page URL."))?;
-    validate_url(&url, WebMode::Tor)?;
-    open_tor(&web, &url).await?;
+    if web.mode == WebMode::Direct {
+        validate_url(&url, WebMode::Direct)?;
+        open_chrome(&url).await?;
+    } else {
+        // Web Off disables automated research. Explicit link clicks still use Tor Browser.
+        validate_url(&url, WebMode::Tor)?;
+        open_tor(&web, &url).await?;
+    }
     Ok(Json(serde_json::json!({"opened": true})))
+}
+
+#[cfg(target_os = "windows")]
+fn chrome_path() -> Option<PathBuf> {
+    ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|dir| PathBuf::from(dir).join("Google/Chrome/Application/chrome.exe"))
+        .find(|path| path.is_file())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn chrome_path() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .flat_map(|dir| [dir.join("google-chrome"), dir.join("google-chrome-stable")])
+        .chain([PathBuf::from("/opt/google/chrome/google-chrome")])
+        .find(|path| path.is_file())
+}
+
+async fn open_chrome(url: &Url) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = tokio::process::Command::new("/usr/bin/open");
+        command.args(["-b", "com.google.Chrome", url.as_str()]);
+        command
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut command = {
+        let path = chrome_path().ok_or_else(|| Error::bad_request("Install Google Chrome to open links in Direct mode."))?;
+        let mut command = tokio::process::Command::new(path);
+        command.arg(url.as_str());
+        command
+    };
+    launch_browser(&mut command, "Google Chrome").await
 }
 
 async fn open_tor(web: &WebSettings, url: &Url) -> Result<()> {
@@ -540,14 +580,18 @@ async fn open_tor(web: &WebSettings, url: &Url) -> Result<()> {
         command.arg("--new-tab").arg(url.as_str());
         command
     };
+    launch_browser(&mut command, "Tor Browser").await
+}
+
+async fn launch_browser(command: &mut tokio::process::Command, browser: &str) -> Result<()> {
     command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    let mut child = command
-        .spawn()
-        .map_err(|_| Error::bad_request("Could not start Tor Browser. Check its configured path. No other browser was opened."))?;
+    let mut child = command.spawn().map_err(|_| Error::bad_request(format!("Could not start {browser}.")))?;
     if cfg!(target_os = "macos") {
-        let status = child.wait().await.map_err(|_| Error::bad_request("Tor Browser launch failed."))?;
+        let status = child.wait().await.map_err(|_| Error::bad_request(format!("{browser} launch failed.")))?;
         if !status.success() {
-            return Err(Error::bad_request("Tor Browser refused to open the tab. No other browser was opened."));
+            return Err(Error::bad_request(format!(
+                "Could not open the link in {browser}. Check that it is installed and can be launched."
+            )));
         }
     } else {
         // Browser launchers can stay alive for the entire browsing session.

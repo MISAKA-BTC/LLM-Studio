@@ -1,4 +1,4 @@
-//! **MISAKA Studio core** — the vocabulary the UI, the Runtime and (eventually) the chain all
+//! **LLM Studio core** — the vocabulary the UI, the Runtime and (eventually) the chain all
 //! read a model through.
 //!
 //! Nothing here talks to a network, spawns a process, or serves a request. It answers the four
@@ -57,7 +57,7 @@ pub enum Error {
     NotGguf { path: String, found: [u8; 4] },
 
     #[error(
-        "{path} is GGUF version {version}; MISAKA Studio reads versions 2 and 3. Version 1 used \
+        "{path} is GGUF version {version}; LLM Studio reads versions 2 and 3. Version 1 used \
          32-bit lengths and no shipped model still uses it — re-export the model with a current \
          llama.cpp conversion script."
     )]

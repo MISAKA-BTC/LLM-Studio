@@ -1,6 +1,6 @@
 [package]
 name = "misaka-studio-desktop"
-description = "MISAKA Studio desktop shell: a native window over the Studio UI and its runtime"
+description = "LLM Studio desktop shell: a native window over the Studio UI and its runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

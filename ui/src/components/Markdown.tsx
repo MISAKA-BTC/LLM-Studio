@@ -108,14 +108,14 @@ const COMPONENTS: Components = {
   img({ src, alt }) {
     // Never let a fetched page or a model load tracking images outside the Web route.
     if (!src || !/^https?:\/\//i.test(src)) return <span>{alt ?? 'Image'}</span>
-    return <button type="button" className="underline" onClick={() => void api.web.open(src).catch((error) => useStudio.getState().toast('error', error.message))}>{alt || 'Open image in Tor Browser'}</button>
+    return <button type="button" className="underline" onClick={() => void api.web.open(src).catch((error) => useStudio.getState().toast('error', error.message))}>{alt || 'Open image in browser'}</button>
   },
   pre: CodeBlock,
   // Links open outside the app. A local-LLM window is not a browser, and a model's hallucinated URL
   // should not replace the app with a 404.
   a({ href, children }) {
     return (
-      <a href={href} target="_blank" rel="noreferrer noopener" title="Open in Tor Browser"
+      <a href={href} target="_blank" rel="noreferrer noopener" title="Open in browser"
         onClick={(event) => {
           if (!href || !/^https?:\/\//i.test(href)) return
           event.preventDefault()

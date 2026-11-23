@@ -1,4 +1,4 @@
-# MISAKA Studio — a SEPARATE cargo workspace, deliberately.
+# LLM Studio — a SEPARATE cargo workspace, deliberately.
 #
 # The node's workspace is a consensus artifact: one lockfile, one lint config, and a
 # `cargo check` that has to stay honest for everyone who builds a validator. A desktop app

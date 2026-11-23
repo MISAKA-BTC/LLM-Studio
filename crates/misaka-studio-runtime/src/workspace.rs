@@ -452,7 +452,7 @@ fn listing_error(dir: &Path, e: &std::io::Error) -> String {
     let mut message = format!("could not list {}: {e}", display_path(dir));
     if cfg!(target_os = "macos") && e.kind() == std::io::ErrorKind::PermissionDenied {
         message.push_str(
-            ". macOS has not given MISAKA Studio access to this folder — allow it under System Settings → \
+            ". macOS has not given LLM Studio access to this folder — allow it under System Settings → \
              Privacy & Security → Files and Folders",
         );
     }

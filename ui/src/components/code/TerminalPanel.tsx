@@ -152,7 +152,7 @@ const Block = memo(function Block({ block, folder, conversationId }: { block: Te
       {block.unsupported ? (
         <div className="mt-1.5 font-sans">
           <NeedsRuntime title="The terminal needs the updated runtime">
-            It streams commands through an endpoint this runtime does not have yet. Restart MISAKA Studio once it is updated.
+            It streams commands through an endpoint this runtime does not have yet. Restart LLM Studio once it is updated.
           </NeedsRuntime>
         </div>
       ) : block.status === 'error' && block.error ? (

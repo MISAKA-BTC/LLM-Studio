@@ -48,7 +48,7 @@ impl MockBackend {
             .unwrap_or_default();
         let trimmed: String = ask.chars().take(160).collect();
         format!(
-            "This is the MISAKA Studio mock runtime — no model is loaded, so nothing here was inferred. \
+            "This is the LLM Studio mock runtime — no model is loaded, so nothing here was inferred. \
              You said: \"{trimmed}\". Load a GGUF from the Models tab to get real answers; every reply \
              then carries its model hash, runtime identity and inference hash."
         )

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
-#[command(name = "misaka-studiod", version, about = "MISAKA Studio runtime: local LLM inference with an OpenAI-compatible API")]
+#[command(name = "misaka-studiod", version, about = "LLM Studio runtime: local LLM inference with an OpenAI-compatible API")]
 struct Args {
     /// Address to bind. Anything but a loopback address requires --api-key.
     #[arg(long, env = "MISAKA_STUDIO_HOST")]

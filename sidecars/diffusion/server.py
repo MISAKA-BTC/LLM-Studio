@@ -1,6 +1,6 @@
 """Diffusion sidecar — a small HTTP server around `diffusers`.
 
-MISAKA Studio's Rust backends supervise an external OpenAI-compatible server as a
+LLM Studio's Rust backends supervise an external OpenAI-compatible server as a
 child process (see `crates/misaka-studio-runtime/src/backend/llamacpp.rs` and
 `mlx.rs`). Image generation follows the same shape: this script is spawned by
 `crates/misaka-studio-runtime/src/backend/diffusion.rs`, and the Rust side never

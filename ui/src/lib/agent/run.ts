@@ -46,6 +46,11 @@ let latestToken = 0
 let approval: { token: number; toolCallId: string; resolve: (answer: ApprovalAnswer) => void } | null = null
 const contextWarned = new Set<string>()
 
+/** A stopped run may still be saving its final turn after the Stop button disappears. */
+export function activeAgentConversation(): string | null {
+  return active?.conversationId ?? null
+}
+
 const GATEWAY_EXPLAINED =
   'The agent cannot run on the mining gateway: its 512-token class cannot hold even one tool result. Load a local model to chat with (llama.cpp), and turn on background mining — the prompts you type are still mined while the agent works on the local engine.'
 
@@ -83,9 +88,13 @@ export async function startAgentRun(
   conversationId: string,
   text: string,
   attachments?: Attachment[],
-  options: { mining?: MessageMining } = {},
+  options: { mining?: MessageMining; onRefused?: () => void } = {},
 ): Promise<void> {
-  const back = (kind: 'info' | 'error', note: string) => refuse(kind, note, text, attachments)
+  const back = (kind: 'info' | 'error', note: string) => {
+    if (!options.onRefused) return refuse(kind, note, text, attachments)
+    useStudio.getState().toast(kind, note)
+    options.onRefused()
+  }
   const studio = useStudio.getState()
   const conversation = studio.conversations.find((c) => c.id === conversationId)
   if (!conversation) return
@@ -119,16 +128,6 @@ export async function startAgentRun(
     )
   }
 
-  // The folder as the runtime sees it now — it may have moved or gone since the thread was made —
-  // and its branch, for the system prompt.
-  let info: Pick<WorkspaceInfo, 'root' | 'name' | 'branch' | 'is_git'> = { root: '', name: 'Web research', branch: null, is_git: false }
-  try {
-    if (!webRun) info = await openWorkspace(conversation.workspace!, true)
-  } catch (error) {
-    return back('error', `The folder ${conversation.workspace} cannot be opened: ${(error as Error).message}`)
-  }
-  if (active && !active.controller.signal.aborted) return back('info', 'The agent is already working. Stop it first.')
-
   const token = ++latestToken
   const controller = new AbortController()
   active = { token, conversationId, controller }
@@ -141,6 +140,16 @@ export async function startAgentRun(
   useAgent.setState({ run: { conversationId, status: 'running', step: 1 }, pendingApproval: null })
 
   try {
+    // The folder may have moved since the session was created. Read it while this run holds the slot.
+    let info: Pick<WorkspaceInfo, 'root' | 'name' | 'branch' | 'is_git'> = { root: '', name: 'Web research', branch: null, is_git: false }
+    try {
+      if (!webRun) info = await openWorkspace(conversation.workspace!, true)
+    } catch (error) {
+      if (running()) back('error', `The folder ${conversation.workspace} cannot be opened: ${(error as Error).message}`)
+      return
+    }
+    if (!running()) return
+
     const allowClicks = webRun && requestsBrowserAction(text)
     const managed = allowClicks && (await api.web.browser().catch(() => null))?.managed === true
     if (!running()) return

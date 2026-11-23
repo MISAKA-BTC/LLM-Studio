@@ -130,7 +130,7 @@ type StudioState = {
   setConversationMining: (id: string, mine: boolean) => void
   /** Empty the transcript but keep the conversation, its settings and its pinned notes. */
   clearConversation: (id: string) => void
-  send: (text: string, attachments?: Attachment[]) => Promise<void>
+  send: (text: string, attachments?: Attachment[], conversationId?: string) => Promise<void>
   /** Queue a prompt for background mining and tie the job to the message that carries it. A no-op
    *  unless the runtime's queue is in background mode and this conversation has mining on. */
   enqueueMining: (conversationId: string, messageId: string, prompt: string) => Promise<void>
@@ -210,7 +210,7 @@ function sessionStorage(): PersistStorage<Persisted> | undefined {
     } catch (error) {
       // Over quota, most likely. The window keeps working; what was not saved is what a reload
       // would lose, which is better said in the console than by refusing to stream.
-      console.warn('MISAKA Studio could not save the conversations:', error)
+      console.warn('LLM Studio could not save the conversations:', error)
     }
   }
   if (typeof window !== 'undefined') {
@@ -283,7 +283,7 @@ export const useStudio = create<StudioState>()(
           set({ preferredModelId: get().preferredModelId ?? defaultModelId(get()) })
         } catch (error) {
           set({ connected: false })
-          get().toast('error', `Cannot reach the MISAKA Runtime: ${(error as Error).message}`)
+          get().toast('error', `Cannot reach the LLM Studio Runtime: ${(error as Error).message}`)
         }
         // Fetched separately from the core bootstrap: an image backend is opt-in and not
         // configuring one must never be the reason chat fails to open.
@@ -587,10 +587,11 @@ export const useStudio = create<StudioState>()(
         }
       },
 
-      send: async (text, attachments) => {
+      send: async (text, attachments, target) => {
         const trimmed = text.trim()
         if (!trimmed && !attachments?.length) return
-        let conversationId = get().activeConversationId
+        if (target && !get().conversations.some((c) => c.id === target)) return
+        let conversationId = target ?? get().activeConversationId
         if (!conversationId || !get().conversations.some((c) => c.id === conversationId)) conversationId = get().newConversation()
 
         if (get().conversations.find((c) => c.id === conversationId)?.web) {

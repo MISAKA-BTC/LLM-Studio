@@ -1,4 +1,4 @@
-MISAKA Studio
+LLM Studio
 Copyright (c) 2026 MISAKA contributors
 
 This product is licensed under the ISC License — the same licence as the MISAKA node
@@ -10,7 +10,7 @@ Copyright 2025 Menlo Research
 Licensed under the Apache License, Version 2.0
 --------------------------------------------------------------------------------
 
-Jan is the reference open-source local-LLM desktop application MISAKA Studio was
+Jan is the reference open-source local-LLM desktop application LLM Studio was
 designed against. Specifically, the following were taken from Jan as prior art
 and re-implemented here:
 
@@ -39,7 +39,7 @@ Copyright (c) 2023-2026 The ggml authors
 Licensed under the MIT License
 --------------------------------------------------------------------------------
 
-MISAKA Studio's default backend runs llama.cpp's `llama-server` as a child
+LLM Studio's default backend runs llama.cpp's `llama-server` as a child
 process. No llama.cpp source or binary is contained in or distributed with this
 tree; the Studio locates an engine the user installed, or one a packaged build
 ships beside the executable. A distribution that does bundle `llama-server` must
@@ -76,7 +76,7 @@ What was deliberately NOT used
 
 LM Studio and other closed-source local-LLM applications. No part of this work
 derives from their code, their protocols, or from reverse-engineering them.
-Where MISAKA Studio and such products share a feature, it is because both solve
+Where LLM Studio and such products share a feature, it is because both solve
 the same problem for the same users.
 
 --------------------------------------------------------------------------------
