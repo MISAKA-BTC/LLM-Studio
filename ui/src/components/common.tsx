@@ -313,6 +313,26 @@ const PATHS = {
       <path d="m16 16-2 2 2 2M3 18h7" />
     </>
   ),
+  panelBottom: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 15h18" />
+    </>
+  ),
+  verified: (
+    <>
+      <path d="M12 2l2.4 1.8 3-.3.9 2.9 2.6 1.5-.9 2.9.9 2.9-2.6 1.5-.9 2.9-3-.3L12 22l-2.4-1.8-3 .3-.9-2.9-2.6-1.5.9-2.9-.9-2.9 2.6-1.5.9-2.9 3 .3z" />
+      <path d="m9 12 2 2 4-4" />
+    </>
+  ),
+  modelSearch: (
+    <>
+      <path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-.57" />
+      <path d="m3.3 7 8.7 5 8.7-5M12 22V12" />
+      <circle cx="17.5" cy="17.5" r="3.5" />
+      <path d="m20 20 2 2" />
+    </>
+  ),
 } as const
 
 export function Spinner({ className = 'size-4' }: { className?: string }) {
@@ -402,10 +422,10 @@ export function FitBadge({ fit, summary }: { fit: FitVerdict; summary: string })
 
 export function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
-    <section className="card p-5">
-      <h3 className="text-sm font-semibold">{title}</h3>
-      {description && <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{description}</p>}
-      <div className="mt-4 space-y-4">{children}</div>
+    <section className="card p-4">
+      <h3 className="text-[13px] font-semibold text-ink-900 dark:text-ink-50">{title}</h3>
+      {description && <p className="mt-0.5 text-xs text-ink-500 dark:text-ink-400">{description}</p>}
+      <div className="mt-3.5 space-y-3.5">{children}</div>
     </section>
   )
 }
@@ -475,10 +495,10 @@ export function Toggle({ label, checked, onChange, hint }: { label: string; chec
 
 export function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
-    <div className="card p-4">
-      <div className="text-[0.7rem] uppercase tracking-wide text-ink-500 dark:text-ink-400">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-ink-500 dark:text-ink-400">{sub}</div>}
+    <div className="card p-3.5">
+      <div className="text-[0.65rem] font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400">{label}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums text-ink-900 dark:text-ink-50">{value}</div>
+      {sub && <div className="mt-0.5 text-[11px] text-ink-500 dark:text-ink-400">{sub}</div>}
     </div>
   )
 }
@@ -489,8 +509,8 @@ export function Meter({ value, max, caption, tone = 'arc' }: { value: number; ma
   const bar = tone === 'warn' || percent > 90 ? 'bg-amber-500' : 'bg-arc-500'
   return (
     <div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-ink-200 dark:bg-ink-800">
-        <div className={`h-full rounded-full ${bar} transition-[width] duration-500`} style={{ width: `${percent}%` }} />
+      <div className="h-1.5 w-full overflow-hidden rounded-[2px] bg-ink-200 dark:bg-ink-800">
+        <div className={`h-full ${bar} transition-[width] duration-500`} style={{ width: `${percent}%` }} />
       </div>
       {caption && <div className="mt-1 text-xs text-ink-500 dark:text-ink-400">{caption}</div>}
     </div>
@@ -499,12 +519,12 @@ export function Meter({ value, max, caption, tone = 'arc' }: { value: number; ma
 
 export function EmptyState({ icon, title, children }: { icon: IconName; title: string; children?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-      <div className="rounded-2xl bg-ink-100 p-4 text-ink-400 dark:bg-ink-900 dark:text-ink-500">
-        <Icon name={icon} className="size-7" />
+    <div className="flex flex-col items-center justify-center gap-2.5 px-6 py-14 text-center">
+      <div className="rounded-[6px] border border-ink-200 bg-ink-50 p-3 text-ink-400 dark:border-ink-800 dark:bg-ink-850 dark:text-ink-400">
+        <Icon name={icon} className="size-6" />
       </div>
-      <h3 className="text-base font-semibold">{title}</h3>
-      <div className="max-w-md text-sm text-ink-500 dark:text-ink-400">{children}</div>
+      <h3 className="text-sm font-semibold text-ink-900 dark:text-ink-50">{title}</h3>
+      <div className="max-w-md text-xs leading-relaxed text-ink-500 dark:text-ink-400">{children}</div>
     </div>
   )
 }

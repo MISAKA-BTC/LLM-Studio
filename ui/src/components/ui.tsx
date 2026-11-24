@@ -286,7 +286,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={label}
-        className={`pop-in w-full overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-2xl shadow-ink-950/20 dark:border-ink-700 dark:bg-ink-900 dark:shadow-black/50 ${className}`}
+        className={`pop-in w-full overflow-hidden rounded-[6px] border border-ink-300 bg-ink-50 shadow-2xl shadow-black/25 dark:border-[#454545] dark:bg-ink-850 dark:shadow-black/65 ${className}`}
       >
         {children}
       </div>
@@ -319,7 +319,7 @@ export function IconButton({
   return (
     <button
       type="button"
-      className={`icon-btn ${active ? 'bg-ink-100 text-ink-900 dark:bg-ink-800 dark:text-ink-50' : ''} ${className}`}
+      className={`icon-btn ${active ? 'bg-arc-600/15 text-arc-600 dark:bg-[#04395e] dark:text-white' : ''} ${className}`}
       title={title}
       aria-label={label}
       aria-pressed={active}
@@ -348,7 +348,7 @@ export function Segmented<T extends string>({
   disabled?: boolean
 }) {
   return (
-    <div className={`inline-flex items-center gap-0.5 rounded-lg bg-ink-100 p-0.5 dark:bg-ink-800 ${className}`} role="radiogroup">
+    <div className={`inline-flex items-center gap-0.5 rounded-[4px] border border-ink-300 bg-ink-100 p-0.5 dark:border-ink-700 dark:bg-[#1e1e1e] ${className}`} role="radiogroup">
       {options.map((option) => (
         <button
           key={option.value}
@@ -358,10 +358,10 @@ export function Segmented<T extends string>({
           disabled={disabled}
           title={option.title}
           onClick={() => onChange(option.value)}
-          className={`inline-flex h-6 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors disabled:opacity-50 ${
+          className={`inline-flex h-5 items-center gap-1 rounded-[3px] px-2 text-[11px] font-medium transition-colors disabled:opacity-50 ${
             option.value === value
-              ? 'bg-white text-ink-900 shadow-sm dark:bg-ink-950 dark:text-ink-50'
-              : 'text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100'
+              ? 'bg-arc-600 text-white shadow-xs'
+              : 'text-ink-600 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100'
           }`}
         >
           {option.icon && <Icon name={option.icon} className="size-3.5" />}

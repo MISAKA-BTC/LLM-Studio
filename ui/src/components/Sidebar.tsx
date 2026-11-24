@@ -3,7 +3,6 @@
 // pauses the hidden list without discarding its scroll position or in-progress rename.
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
-import logo from '../assets/llm-studio.png'
 import { useAgent } from '../lib/agent/run'
 import { useWorkspaceInfo } from '../lib/agent/workspace'
 import { formatShortcut } from '../lib/keys'
@@ -42,7 +41,7 @@ const SIDES: AppMode[] = ['chat', 'code']
 
 /** The small buttons a row shows under the pointer or the keyboard: a row's menu, a project's `+`. */
 const ROW_BUTTON =
-  'inline-flex size-6 items-center justify-center rounded-md text-ink-500 hover:bg-ink-200 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-500/50 dark:text-ink-400 dark:hover:bg-ink-700 dark:hover:text-ink-50'
+  'inline-flex size-5 items-center justify-center rounded-[3px] text-ink-500 hover:bg-ink-200 hover:text-ink-900 focus-visible:outline-1 focus-visible:outline-arc-500 dark:text-[#9d9d9d] dark:hover:bg-[#3c3c3c] dark:hover:text-white'
 
 const THEME_ICON = { system: 'monitor', light: 'sun', dark: 'moon' } as const
 const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' }
@@ -140,14 +139,45 @@ function ActivityDot({ activity, className = '' }: { activity: Activity; classNa
 function ExpandedSidebar() {
   const toggleSidebar = useUi((s) => s.toggleSidebar)
   const side = useUi((s) => s.appMode)
+  const project = useNewSessionProject()
   return (
-    <aside className="flex h-full w-full flex-col border-r border-ink-200 bg-ink-50 dark:border-ink-800 dark:bg-ink-900" aria-label="Sidebar">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-ink-200 pl-4 pr-1 dark:border-ink-800">
-        <span className="min-w-0 flex-1 truncate text-[0.65rem] font-semibold uppercase tracking-wider text-ink-500">{side === 'code' ? 'Explorer' : 'Conversations'}</span>
-        <IconButton icon="panelLeft" label="Collapse sidebar" shortcut={SHORTCUTS.toggleSidebar} onClick={toggleSidebar} />
+    <aside className="flex h-full w-full flex-col border-r border-ink-200 bg-ink-50 select-none dark:border-ink-800 dark:bg-ink-950" aria-label="Sidebar">
+      <div className="flex h-[35px] shrink-0 items-center gap-1 border-b border-ink-200 pl-3 pr-1.5 dark:border-ink-800">
+        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wider text-ink-600 dark:text-[#bbbbbb]">
+          {side === 'code' ? 'Explorer · Sessions' : 'Conversations'}
+        </span>
+        {side === 'chat' ? (
+          <IconButton icon="plus" label="New chat" shortcut={NEW_CHAT_HINT} onClick={newChat} className="!size-[22px]" />
+        ) : (
+          <>
+            <IconButton
+              icon="plus"
+              label={project ? `New session in ${folderLabel(project)}` : 'New session'}
+              shortcut={NEW_CHAT_HINT}
+              onClick={newSession}
+              className="!size-[22px]"
+            />
+            <IconButton icon="folderOpen" label="Open folder…" onClick={openFolder} className="!size-[22px]" />
+          </>
+        )}
+        <IconButton
+          icon="search"
+          label="Find files and conversations"
+          shortcut={SHORTCUTS.quickOpen}
+          onClick={() => useUi.getState().setQuickOpen(true)}
+          className="!size-[22px]"
+        />
+        <IconButton icon="panelLeft" label="Collapse sidebar" shortcut={SHORTCUTS.toggleSidebar} onClick={toggleSidebar} className="!size-[22px]" />
       </div>
-      <div className="shrink-0 space-y-px px-1 py-1">
-        {side === 'chat' ? <SidebarButton icon="compose" label="New chat" shortcut={NEW_CHAT_HINT} onClick={newChat} /> : <><NewSessionButton /><SidebarButton icon="folderOpen" label="Open folder…" title="Open a folder and start a session in it" onClick={openFolder} /></>}
+      <div className="shrink-0 space-y-px border-b border-ink-200/70 px-1.5 py-1.5 dark:border-ink-800/80">
+        {side === 'chat' ? (
+          <SidebarButton icon="compose" label="New chat" shortcut={NEW_CHAT_HINT} onClick={newChat} />
+        ) : (
+          <>
+            <NewSessionButton />
+            <SidebarButton icon="folderOpen" label="Open folder…" title="Open a folder and start a session in it" onClick={openFolder} />
+          </>
+        )}
         <SidebarButton icon="search" label="Find files and conversations" shortcut={SHORTCUTS.quickOpen} onClick={() => useUi.getState().setQuickOpen(true)} />
       </div>
       <RetainedView active={side === 'chat'}><ChatThreadList /></RetainedView>
@@ -175,9 +205,9 @@ function SidebarButton({
       type="button"
       onClick={onClick}
       title={title ?? (shortcut ? `${label} (${formatShortcut(shortcut)})` : label)}
-      className="flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[0.8rem] text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900 focus-visible:bg-ink-100 focus-visible:outline-none dark:text-ink-200 dark:hover:bg-ink-800 dark:hover:text-ink-50 dark:focus-visible:bg-ink-800"
+      className="flex h-7 w-full items-center gap-2 rounded-[3px] px-2 text-[12px] text-ink-700 transition-colors hover:bg-ink-200/70 hover:text-ink-900 focus-visible:bg-ink-200/70 focus-visible:outline-1 focus-visible:outline-arc-500 dark:text-[#cccccc] dark:hover:bg-[#2a2d2e] dark:hover:text-white dark:focus-visible:bg-[#2a2d2e]"
     >
-      <Icon name={icon} className="size-4 shrink-0 opacity-80" />
+      <Icon name={icon} className="size-3.5 shrink-0 opacity-80" />
       <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       {shortcut && <Kbd shortcut={shortcut} className="shrink-0" />}
     </button>
@@ -309,9 +339,9 @@ function ProjectHeader({ project, collapsed, busy }: { project: Project; collaps
             toggle()
           }
         }}
-        className={`peer flex h-8 w-full items-center gap-2 rounded-lg pl-2.5 pr-2 text-left text-[0.8rem] font-medium transition-colors hover:bg-ink-100 focus-visible:bg-ink-100 focus-visible:outline-none dark:hover:bg-ink-800 dark:focus-visible:bg-ink-800 ${
-          menuOpen ? 'bg-ink-100 dark:bg-ink-800' : ''
-        } ${path ? 'text-ink-700 dark:text-ink-200' : 'text-ink-500 dark:text-ink-400'}`}
+        className={`peer flex h-7 w-full items-center gap-1.5 rounded-[3px] pl-2 pr-2 text-left text-[12px] font-semibold transition-colors hover:bg-ink-200/60 focus-visible:bg-ink-200/60 focus-visible:outline-1 focus-visible:outline-arc-500 dark:hover:bg-[#2a2d2e] dark:focus-visible:bg-[#2a2d2e] ${
+          menuOpen ? 'bg-ink-200/60 dark:bg-[#2a2d2e]' : ''
+        } ${path ? 'text-ink-800 dark:text-[#cccccc]' : 'text-ink-500 dark:text-ink-400'}`}
       >
         {/* The folder, open or shut; under the pointer, the chevron that says a click folds it. */}
         <span className="relative flex size-4 shrink-0 items-center justify-center text-ink-400 dark:text-ink-500" aria-hidden>
@@ -494,10 +524,10 @@ const ThreadRow = memo(function ThreadRow({ conversation, kind, active, running,
           }}
           aria-current={active ? 'page' : undefined}
           title={title}
-          className={`peer group/row flex h-8 w-full items-center gap-2 rounded-lg pl-2.5 pr-2 text-left text-[0.8rem] transition-colors focus-visible:bg-ink-100 focus-visible:outline-none dark:focus-visible:bg-ink-800 ${
+          className={`peer group/row flex h-7 w-full items-center gap-2 rounded-[3px] pl-2 pr-2 text-left text-[12px] transition-colors focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-arc-500 ${
             active || menuOpen
-              ? 'bg-ink-100 text-ink-900 dark:bg-ink-800 dark:text-ink-50'
-              : 'text-ink-600 hover:bg-ink-100 hover:text-ink-900 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-50'
+              ? 'bg-arc-600/12 font-medium text-ink-900 dark:bg-[#04395e] dark:text-white'
+              : 'text-ink-700 hover:bg-ink-200/60 hover:text-ink-900 dark:text-[#cccccc] dark:hover:bg-[#2a2d2e] dark:hover:text-white'
           }`}
         >
           <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
@@ -706,75 +736,141 @@ function ThemeButton() {
   )
 }
 
+function RailSlot({
+  icon,
+  label,
+  title,
+  active,
+  badge,
+  dot,
+  onClick,
+}: {
+  icon: IconName
+  label: string
+  title?: string
+  active: boolean
+  badge?: number
+  dot?: Activity
+  onClick: () => void
+}) {
+  return (
+    <span className="relative flex w-full justify-center">
+      <button
+        type="button"
+        aria-pressed={active}
+        aria-label={label}
+        title={title ?? label}
+        onClick={onClick}
+        className={`relative inline-flex h-11 w-full items-center justify-center border-l-2 transition-colors focus-visible:outline-1 focus-visible:-outline-offset-2 focus-visible:outline-arc-500 ${
+          active
+            ? 'border-arc-500 text-ink-900 dark:text-white'
+            : 'border-transparent text-ink-400 hover:text-ink-800 dark:text-[#858585] dark:hover:text-white'
+        }`}
+      >
+        <Icon name={icon} className="size-5" />
+      </button>
+      {badge !== undefined && badge > 0 && (
+        <span
+          className="pointer-events-none absolute bottom-1.5 right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-arc-600 px-1 text-[9px] font-semibold leading-none text-white"
+          title={`${badge} active`}
+        >
+          {badge}
+        </span>
+      )}
+      {!active && dot && <ActivityDot activity={dot} className="right-2 top-2" />}
+    </span>
+  )
+}
+
 function SidebarRail() {
-  const toggleSidebar = useUi((s) => s.toggleSidebar)
   const sidebarOpen = useUi((s) => s.sidebarOpen)
+  const toggleSidebar = useUi((s) => s.toggleSidebar)
   const side = useUi((s) => s.appMode)
+  const modelsTab = useUi((s) => s.modelsTab)
+  const setModelsTab = useUi((s) => s.setModelsTab)
   const view = useStudio((s) => s.view)
   const downloads = useActiveDownloads()
   const activity = useSideActivity()
-  const project = useNewSessionProject()
 
   return (
-    <aside className="flex h-full w-12 shrink-0 flex-col items-center gap-0.5 border-r border-ink-200 bg-white py-2 dark:border-ink-800 dark:bg-ink-900" aria-label="Activity bar">
-      <img src={logo} alt="LLM Studio" className="mb-2 mt-1 h-5 w-auto" />
-      <IconButton icon="panelLeft" label={sidebarOpen ? "Hide sidebar" : "Expand sidebar"} shortcut={SHORTCUTS.toggleSidebar} onClick={toggleSidebar} />
-      <div className="my-1.5 h-px w-6 bg-ink-200 dark:bg-ink-800" />
-      <div className="flex w-full flex-col gap-1" role="group" aria-label="Chat or Code">
+    <aside
+      className="flex h-full w-12 shrink-0 flex-col items-center border-r border-ink-200 bg-ink-50 py-1 select-none dark:border-ink-800 dark:bg-ink-950"
+      aria-label="Activity bar"
+    >
+      <div className="flex w-full flex-col" role="group" aria-label="Chat or Code">
         {SIDES.map((mode) => {
-          const on = side === mode
+          const on = view === 'chat' && side === mode
           return (
-            <span key={mode} className="relative flex w-full justify-center">
-              <button
-                type="button"
-                aria-pressed={on}
-                aria-label={SIDE_LABELS[mode]}
-                title={sideTitle(mode, on ? null : activity[mode])}
-                onClick={() => { switchAppMode(mode); useUi.getState().setSidebarOpen(true) }}
-                className={`inline-flex h-10 w-full items-center justify-center border-l-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-500/40 ${
-                  on
-                    ? 'border-arc-500 bg-ink-100 text-ink-900 dark:bg-ink-800 dark:text-ink-50'
-                    : 'border-transparent text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100'
-                }`}
-              >
-                <Icon name={SIDE_ICONS[mode]} className="size-4" />
-              </button>
-              {!on && <ActivityDot activity={activity[mode]} className="right-0.5 top-0.5" />}
-            </span>
+            <RailSlot
+              key={mode}
+              icon={SIDE_ICONS[mode]}
+              label={SIDE_LABELS[mode]}
+              title={sideTitle(mode, on ? null : activity[mode])}
+              active={on && sidebarOpen}
+              dot={activity[mode]}
+              onClick={() => {
+                if (view === 'chat' && side === mode) {
+                  toggleSidebar()
+                } else {
+                  switchAppMode(mode)
+                  useUi.getState().setSidebarOpen(true)
+                }
+              }}
+            />
           )
         })}
       </div>
-      <div className="my-1.5 h-px w-6 bg-ink-200 dark:bg-ink-800" />
-      {side === 'chat' ? (
-        <IconButton icon="compose" label="New chat" shortcut={NEW_CHAT_HINT} onClick={newChat} />
-      ) : (
-        <>
-          <IconButton icon="plus" label={project ? `New session in ${folderLabel(project)}` : 'New session'} shortcut={NEW_CHAT_HINT} onClick={newSession} />
-          <IconButton icon="folderOpen" label="Open folder…" onClick={openFolder} />
-        </>
-      )}
-      <IconButton icon="search" label="Search" shortcut={SHORTCUTS.quickOpen} onClick={() => useUi.getState().setQuickOpen(true)} />
-      <div className="my-1.5 h-px w-6 bg-ink-200 dark:bg-ink-800" />
-      <nav className="flex flex-col items-center gap-0.5" aria-label="Views">
-        {NAV.map((item) => (
-          <span key={item} className="relative">
-            <IconButton
+
+      <RailSlot
+        icon="search"
+        label="Search"
+        title={`Search files and conversations (${formatShortcut(SHORTCUTS.quickOpen)})`}
+        active={false}
+        onClick={() => useUi.getState().setQuickOpen(true)}
+      />
+
+      <div className="my-1 h-px w-6 bg-ink-200 dark:bg-ink-800" />
+
+      <nav className="flex w-full flex-col items-center" aria-label="Views">
+        <RailSlot
+          icon="modelSearch"
+          label="Model Search"
+          title="Model Search — Discover & download GGUF / MLX models"
+          active={view === 'models' && modelsTab === 'discover'}
+          onClick={() => {
+            setModelsTab('discover')
+            goTo('models')
+          }}
+        />
+        {NAV.map((item) => {
+          const active = item === 'models' ? view === 'models' && modelsTab === 'installed' : view === item
+          return (
+            <RailSlot
+              key={item}
               icon={VIEW_ICONS[item]}
               label={VIEW_LABELS[item]}
-              shortcut={VIEW_SHORTCUTS[item]}
-              className={view === item ? 'bg-arc-500/10 text-arc-700 hover:text-arc-700 dark:bg-arc-400/10 dark:text-arc-300 dark:hover:text-arc-300' : ''}
-              onClick={() => goTo(item)}
+              title={`${VIEW_LABELS[item]} (${formatShortcut(VIEW_SHORTCUTS[item])})`}
+              active={active}
+              badge={item === 'models' ? downloads : undefined}
+              onClick={() => {
+                if (item === 'models') setModelsTab('installed')
+                goTo(item)
+              }}
             />
-            {item === 'models' && downloads > 0 && (
-              <span className="pointer-events-none absolute right-0.5 top-0.5 size-1.5 rounded-full bg-arc-500" title={`${downloads} downloading`} />
-            )}
-          </span>
-        ))}
+          )
+        })}
       </nav>
+
       <div className="flex-1" />
       <ConnectionStatus compact />
       <ThemeButton />
-      <IconButton icon="settings" label="Settings" shortcut={SHORTCUTS.settings} active={view === 'settings'} onClick={() => goTo('settings')} />
+      <RailSlot
+        icon="settings"
+        label="Settings"
+        title={`Settings (${formatShortcut(SHORTCUTS.settings)})`}
+        active={view === 'settings'}
+        onClick={() => goTo('settings')}
+      />
     </aside>
   )
 }

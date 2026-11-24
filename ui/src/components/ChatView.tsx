@@ -269,7 +269,7 @@ export function ChatView() {
   })
 
   return (
-    <div className="relative flex h-full min-w-0 bg-ink-50 dark:bg-ink-950">
+    <div className="relative flex h-full min-w-0 bg-white dark:bg-ink-900">
       <div ref={dropRef} className="relative flex min-w-0 flex-1 flex-col" {...dropHandlers}>
         <ChatHeader conversation={conversation} generating={generating} />
         <ParametersDrawer />
@@ -292,7 +292,7 @@ export function ChatView() {
           {approvalMessage && pendingApproval && (
             <button
               type="button"
-              className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
+              className="absolute right-3 top-2.5 z-10 inline-flex items-center gap-1.5 rounded-[4px] border border-amber-400 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 shadow-sm dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
               onClick={() => transcriptHandle.current?.scrollToMessage(approvalMessage.id, pendingApproval)}
             >
               <Icon name="shield" className="size-3.5" />
@@ -300,36 +300,34 @@ export function ChatView() {
             </button>
           )}
 
-          {!empty && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-ink-50 dark:from-ink-950" aria-hidden />
-          )}
           {!empty && !atBottom && (
             <button
               type="button"
-              className="absolute bottom-3 left-1/2 z-10 inline-flex size-8 -translate-x-1/2 items-center justify-center rounded-full border border-ink-200 bg-white text-ink-600 shadow-md shadow-ink-950/10 transition-colors hover:text-ink-900 dark:border-ink-700 dark:bg-ink-850 dark:text-ink-300 dark:shadow-black/40 dark:hover:text-ink-50"
+              className="absolute bottom-3 left-1/2 z-10 inline-flex h-7 -translate-x-1/2 items-center gap-1 rounded-[4px] border border-ink-300 bg-ink-50 px-2.5 text-xs text-ink-700 shadow-md transition-colors hover:bg-white hover:text-ink-900 dark:border-[#454545] dark:bg-ink-850 dark:text-[#cccccc] dark:shadow-black/50 dark:hover:text-white"
               onClick={jumpToBottom}
               aria-label="Jump to the latest message"
               title="Jump to the latest message"
             >
-              <Icon name="arrowDown" className="size-4" />
+              <Icon name="arrowDown" className="size-3.5" />
+              <span>Latest</span>
             </button>
           )}
         </div>
 
         {!empty && (
-          <div className="shrink-0 px-4 pb-4 pt-1">
-            <div className="mx-auto w-full max-w-[760px]">
+          <div className="shrink-0 border-t border-ink-200/80 bg-ink-50/40 px-4 py-3 dark:border-ink-800 dark:bg-ink-950/30">
+            <div className="mx-auto w-full max-w-[820px]">
               <Composer conversation={conversation} variant="dock" onSend={follow} onEditLast={editLast} />
             </div>
           </div>
         )}
 
         {dragging && (
-          <div className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-arc-500/60 bg-arc-500/5">
-            <div className="flex flex-col items-center gap-1.5 rounded-xl bg-white px-6 py-4 text-center shadow-lg dark:bg-ink-900">
-              <Icon name="upload" className="size-6 text-arc-600 dark:text-arc-400" />
-              <span className="text-sm font-medium">Drop to attach</span>
-              <span className="text-xs text-ink-500 dark:text-ink-400">Text files, up to 200 KB each — never mined</span>
+          <div className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-[6px] border border-dashed border-arc-500 bg-arc-500/5">
+            <div className="flex flex-col items-center gap-1.5 rounded-[4px] border border-ink-300 bg-white px-5 py-3.5 text-center shadow-lg dark:border-[#454545] dark:bg-ink-850">
+              <Icon name="upload" className="size-5 text-arc-600 dark:text-arc-400" />
+              <span className="text-xs font-semibold">Drop to attach</span>
+              <span className="text-[11px] text-ink-500 dark:text-ink-400">Text files, up to 200 KB each — never mined</span>
             </div>
           </div>
         )}

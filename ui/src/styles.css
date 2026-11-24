@@ -1,35 +1,42 @@
 @import 'tailwindcss';
 @import 'highlight.js/styles/github-dark.css' layer(base);
 
-/* Dark mode is driven by a class on <html>, set by the pre-paint script in index.html and by the
-   theme setting — not by `prefers-color-scheme` alone, because the app lets the user override the
-   system. */
+/* Dark mode is driven by `.dark` on <html>, set by the pre-paint script in index.html and by the
+   theme setting so user overrides work independently of system preferences. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-.workbench-tabs { scrollbar-width: thin; scrollbar-color: var(--color-ink-400) transparent; }
-.workbench-tabs::-webkit-scrollbar { height: 3px; }
-.workbench-tabs::-webkit-scrollbar-thumb { background: var(--color-ink-400); }
+.workbench-tabs {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-400) transparent;
+}
+.workbench-tabs::-webkit-scrollbar {
+  height: 3px;
+}
+.workbench-tabs::-webkit-scrollbar-thumb {
+  background: var(--color-ink-400);
+}
 
+/* VS Code Dark Modern & Light Modern surface/border/accent tokens */
 @theme {
-  --color-ink-50: oklch(0.98 0.004 265);
-  --color-ink-100: oklch(0.95 0.006 265);
-  --color-ink-200: oklch(0.9 0.008 265);
-  --color-ink-300: oklch(0.8 0.01 265);
-  --color-ink-400: oklch(0.65 0.014 265);
-  --color-ink-500: oklch(0.53 0.016 265);
-  --color-ink-600: oklch(0.42 0.018 265);
-  --color-ink-700: oklch(0.32 0.02 265);
-  --color-ink-800: oklch(0.24 0.02 265);
-  --color-ink-850: oklch(0.19 0.019 265);
-  --color-ink-900: oklch(0.15 0.018 265);
-  --color-ink-950: oklch(0.11 0.016 265);
+  --color-ink-50: #f8f8f8;
+  --color-ink-100: #efefef;
+  --color-ink-200: #e5e5e5;
+  --color-ink-300: #cecece;
+  --color-ink-400: #8b8b8b;
+  --color-ink-500: #6b6b6b;
+  --color-ink-600: #4b4b4b;
+  --color-ink-700: #3c3c3c;
+  --color-ink-800: #2b2b2b;
+  --color-ink-850: #252526;
+  --color-ink-900: #1f1f1f;
+  --color-ink-950: #181818;
 
-  /* MISAKA's accent. One accent, used for the interactive affordance and nothing decorative. */
-  --color-arc-300: oklch(0.83 0.11 195);
-  --color-arc-400: oklch(0.76 0.14 195);
-  --color-arc-500: oklch(0.68 0.15 196);
-  --color-arc-600: oklch(0.58 0.14 197);
-  --color-arc-700: oklch(0.48 0.12 198);
+  /* VS Code Modern interactive blue accent */
+  --color-arc-300: #75beff;
+  --color-arc-400: #3794ff;
+  --color-arc-500: #007fd4;
+  --color-arc-600: #0078d4;
+  --color-arc-700: #026ec1;
 }
 
 @layer base {
@@ -40,183 +47,188 @@
   }
 
   body {
-    @apply bg-ink-50 text-ink-900 antialiased;
-    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    @apply bg-white text-[#1f1f1f] antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', sans-serif;
+    font-size: 13px;
   }
 
   .dark body {
-    @apply bg-ink-950 text-ink-100;
+    @apply bg-ink-900 text-[#cccccc];
   }
 
-  /* A scrollbar that does not repaint the app's colour scheme in the middle of a dark window. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-ink-300) transparent;
+    scrollbar-color: rgba(121, 121, 121, 0.35) transparent;
   }
 
   .dark * {
-    scrollbar-color: var(--color-ink-700) transparent;
+    scrollbar-color: rgba(121, 121, 121, 0.4) transparent;
   }
 }
 
 @layer components {
-  /* Markdown, in the one place it is rendered. Kept here rather than as fifty utility classes on
-     a component that cannot reach the HTML `react-markdown` generates. */
+  /* Assistant & README Markdown typography tuned for IDE readability */
   .prose-chat {
-    @apply text-[0.94rem] leading-relaxed;
+    @apply text-[0.875rem] leading-[1.6];
   }
   .prose-chat > * + * {
-    @apply mt-3;
+    @apply mt-2.5;
   }
   .prose-chat h1 {
-    @apply text-xl font-semibold mt-5;
+    @apply mt-4 border-b border-ink-200 pb-1.5 text-[1.15rem] font-semibold text-ink-900 dark:border-ink-800 dark:text-ink-50;
   }
   .prose-chat h2 {
-    @apply text-lg font-semibold mt-5;
+    @apply mt-4 text-[1rem] font-semibold text-ink-900 dark:text-ink-50;
   }
   .prose-chat h3 {
-    @apply text-base font-semibold mt-4;
+    @apply mt-3 text-[0.9rem] font-semibold text-ink-900 dark:text-ink-100;
   }
   .prose-chat ul {
-    @apply list-disc pl-6 space-y-1;
+    @apply list-disc space-y-1 pl-5;
   }
   .prose-chat ol {
-    @apply list-decimal pl-6 space-y-1;
+    @apply list-decimal space-y-1 pl-5;
   }
   .prose-chat a {
-    @apply text-arc-600 dark:text-arc-400 underline underline-offset-2;
+    @apply text-arc-600 underline decoration-arc-600/40 underline-offset-2 hover:decoration-arc-600 dark:text-arc-400 dark:decoration-arc-400/40 dark:hover:decoration-arc-400;
   }
   .prose-chat blockquote {
-    @apply border-l-2 border-ink-300 dark:border-ink-700 pl-4 text-ink-600 dark:text-ink-400;
+    @apply border-l-2 border-arc-500/60 bg-ink-50/70 py-1 pl-3.5 pr-2 text-ink-600 dark:bg-ink-850/60 dark:text-ink-300;
   }
   .prose-chat code {
-    @apply rounded bg-ink-100 dark:bg-ink-800 px-1.5 py-0.5 text-[0.85em] font-mono;
+    @apply rounded-[3px] border border-ink-200/80 bg-ink-100 px-1.5 py-0.5 font-mono text-[0.84em] dark:border-ink-700/70 dark:bg-ink-850;
   }
   .prose-chat pre {
-    @apply rounded-lg bg-ink-900 dark:bg-black/50 p-4 overflow-x-auto text-[0.85em];
+    @apply overflow-x-auto rounded-[4px] bg-[#141414] p-3 text-[0.82em];
   }
   .prose-chat pre code {
-    @apply bg-transparent p-0 text-ink-100;
+    @apply border-0 bg-transparent p-0 text-[#d4d4d4];
   }
-  /* KaTeX inherits the chat bubble's foreground colour. A displayed proof can be wider than the
-     narrow mobile/desktop-chat column, so scroll the formula itself rather than the whole answer. */
   .prose-chat .katex {
-    font-size: 1.08em;
+    font-size: 1.05em;
   }
   .prose-chat .katex-display {
-    @apply my-4 overflow-x-auto overflow-y-hidden py-1;
+    @apply my-3 overflow-x-auto overflow-y-hidden py-1;
     max-width: 100%;
   }
-  /* A malformed model answer must never make the message bubble itself wider than the window.
-     Valid display equations scroll above; ordinary text continues to wrap naturally here. */
   .prose-chat p,
   .prose-chat li {
     overflow-wrap: anywhere;
   }
   .prose-chat table {
-    @apply w-full text-sm border-collapse;
+    @apply w-full border-collapse text-xs;
   }
   .prose-chat th,
   .prose-chat td {
-    @apply border border-ink-200 dark:border-ink-800 px-3 py-1.5 text-left;
+    @apply border border-ink-200 px-2.5 py-1.5 text-left dark:border-ink-800;
+  }
+  .prose-chat th {
+    @apply bg-ink-50 font-semibold dark:bg-ink-850;
+  }
+  .prose-chat img {
+    @apply my-2 max-w-full rounded-[4px] h-auto;
   }
 
+  /* VS Code flat bordered surface panel */
   .card {
-    @apply rounded-xl border border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-900;
+    @apply rounded-[4px] border border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-850;
   }
 
-  /* One grouped selector for the shared button shape rather than `@apply btn` in each variant:
-     Tailwind v4's `@apply` composes *utilities*, and a class defined in this same layer is not
-     one. Composing them here keeps the variants to the one thing that actually differs. */
+  /* VS Code buttons: crisp 3px corners, compact 12px density, 1px focus outline */
   .btn,
   .btn-primary,
   .btn-ghost,
   .btn-outline,
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium
-      transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-[3px] px-2.5 py-1 text-xs font-medium
+      transition-colors focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-arc-500
+      disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply bg-arc-600 text-white hover:bg-arc-500 disabled:hover:bg-arc-600;
+    @apply bg-arc-600 text-white hover:bg-arc-700 disabled:hover:bg-arc-600;
   }
   .btn-ghost {
-    @apply text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800;
+    @apply text-ink-600 hover:bg-ink-100 hover:text-ink-900 dark:text-[#cccccc] dark:hover:bg-[#2a2d2e] dark:hover:text-white;
   }
   .btn-outline {
-    @apply border border-ink-200 hover:bg-ink-100 dark:border-ink-700 dark:hover:bg-ink-800;
+    @apply border border-ink-300 bg-ink-50 text-ink-800 hover:bg-ink-100 dark:border-ink-700 dark:bg-[#313131] dark:text-[#cccccc] dark:hover:bg-[#3c3c3c];
   }
   .btn-danger {
-    @apply border border-red-300 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40;
+    @apply border border-red-400/60 bg-red-50/50 text-red-700 hover:bg-red-100 dark:border-red-800/80 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/60;
   }
 
+  /* VS Code input / select control (#313131 dark, #3c3c3c border, #007fd4 focus border) */
   .input {
-    @apply w-full rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm outline-none
-      focus:border-arc-500 focus:ring-2 focus:ring-arc-500/20
-      dark:border-ink-700 dark:bg-ink-900 dark:focus:border-arc-500;
+    @apply w-full rounded-[3px] border border-ink-300 bg-white px-2.5 py-1 text-[12.5px] text-ink-900 outline-none
+      focus:border-arc-500
+      dark:border-ink-700 dark:bg-[#313131] dark:text-[#cccccc] dark:placeholder:text-ink-400 dark:focus:border-arc-500;
   }
 
   .badge {
-    @apply inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.7rem] font-medium;
+    @apply inline-flex items-center rounded-[3px] px-1.5 py-0.5 text-[0.68rem] font-medium leading-tight;
   }
 
   .mono {
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace;
   }
 
-  /* --- The Cursor-style shell's shared pieces (components/ui.tsx draws them) --- */
-
-  /* A square, quiet icon button: toolbars, the sidebar header, message actions. */
+  /* VS Code action-bar icon button (26x26, subtle hover) */
   .icon-btn {
-    @apply inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-500 transition-colors
-      hover:bg-ink-100 hover:text-ink-800 disabled:pointer-events-none disabled:opacity-40
-      dark:text-ink-400 dark:hover:bg-ink-800 dark:hover:text-ink-100;
+    @apply inline-flex size-[26px] shrink-0 items-center justify-center rounded-[4px] text-ink-500 transition-colors
+      hover:bg-ink-100 hover:text-ink-900 focus-visible:outline-1 focus-visible:outline-arc-500
+      disabled:pointer-events-none disabled:opacity-40
+      dark:text-[#9d9d9d] dark:hover:bg-[#2a2d2e] dark:hover:text-white;
   }
 
-  /* A compact labelled control in a toolbar: the model picker, the mining chip, the workspace. */
-  /* Grouped, like the buttons above: `@apply` composes utilities, not classes from this layer. */
+  /* Compact toolbar chips */
   .chip,
   .chip-outline {
-    @apply inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-2 text-xs font-medium text-ink-600 transition-colors
-      hover:bg-ink-100 hover:text-ink-900 disabled:pointer-events-none disabled:opacity-50
-      dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-50;
+    @apply inline-flex h-6 max-w-full items-center gap-1.5 rounded-[3px] px-2 text-[11.5px] font-medium text-ink-600 transition-colors
+      hover:bg-ink-100 hover:text-ink-900 focus-visible:outline-1 focus-visible:outline-arc-500
+      disabled:pointer-events-none disabled:opacity-50
+      dark:text-[#cccccc] dark:hover:bg-[#2a2d2e] dark:hover:text-white;
   }
   .chip-outline {
-    @apply border border-ink-200 dark:border-ink-700;
+    @apply border border-ink-300 bg-ink-50/70 dark:border-ink-700 dark:bg-[#2a2a2b];
   }
 
+  /* VS Code keybinding badge */
   .kbd {
-    @apply inline-flex h-[1.15rem] min-w-[1.15rem] items-center justify-center rounded border border-ink-200 bg-ink-50 px-1
-      font-sans text-[0.65rem] font-medium leading-none text-ink-500
-      dark:border-ink-700 dark:bg-ink-800 dark:text-ink-400;
+    @apply inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[3px] border border-ink-300 bg-ink-50 px-1
+      font-mono text-[10px] font-medium leading-none text-ink-600 shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)]
+      dark:border-ink-700 dark:bg-[#313131] dark:text-[#cccccc] dark:shadow-[inset_0_-1px_0_rgba(0,0,0,0.35)];
   }
 
-  /* Popovers and menus. `.menu` is the panel; items highlight on hover and on keyboard focus. */
+  /* VS Code context menu / quick-pick dropdown */
   .menu {
-    @apply min-w-52 rounded-xl border border-ink-200 bg-white p-1 text-sm text-ink-800 shadow-xl shadow-ink-950/10
-      dark:border-ink-700 dark:bg-ink-850 dark:text-ink-100 dark:shadow-black/40;
+    @apply min-w-52 rounded-[4px] border border-ink-300 bg-ink-50 p-1 text-xs text-ink-800 shadow-xl shadow-black/15
+      dark:border-[#454545] dark:bg-ink-850 dark:text-[#cccccc] dark:shadow-black/60;
   }
   .menu-item {
-    @apply flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.8rem] text-ink-700 outline-none
-      hover:bg-ink-100 focus-visible:bg-ink-100 disabled:pointer-events-none disabled:opacity-40
-      data-[active=true]:bg-ink-100
-      dark:text-ink-200 dark:hover:bg-ink-800 dark:focus-visible:bg-ink-800 dark:data-[active=true]:bg-ink-800;
+    @apply flex w-full items-center gap-2 rounded-[3px] px-2 py-1 text-left text-[12px] text-ink-800 outline-none
+      hover:bg-arc-600 hover:text-white focus-visible:bg-arc-600 focus-visible:text-white
+      disabled:pointer-events-none disabled:opacity-40
+      data-[active=true]:bg-arc-600 data-[active=true]:text-white
+      dark:text-[#cccccc] dark:hover:bg-[#04395e] dark:hover:text-white
+      dark:focus-visible:bg-[#04395e] dark:focus-visible:text-white
+      dark:data-[active=true]:bg-[#04395e] dark:data-[active=true]:text-white;
   }
   .menu-label {
-    @apply px-2.5 pb-1 pt-2 text-[0.65rem] font-semibold uppercase tracking-wide text-ink-400 dark:text-ink-500;
+    @apply px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400;
   }
   .menu-sep {
-    @apply my-1 h-px bg-ink-200 dark:bg-ink-700;
+    @apply my-1 h-px bg-ink-200 dark:bg-[#3c3c3c];
   }
 
   .pop-in {
-    animation: pop-in 120ms ease-out;
+    animation: pop-in 90ms ease-out;
   }
 }
 
 @keyframes pop-in {
   from {
     opacity: 0;
-    transform: translateY(-2px) scale(0.985);
+    transform: translateY(-2px);
   }
   to {
     opacity: 1;

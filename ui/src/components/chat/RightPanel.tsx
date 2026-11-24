@@ -87,17 +87,16 @@ function Tab({ id, group, active, label, icon, count, dot, compact }: { id: Pane
       aria-controls={`${group}-panel-body`}
       title={label}
       onClick={() => setRightPanel(id)}
-      className={`relative inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors ${
+      className={`relative inline-flex h-full shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
         active
-          ? 'bg-ink-100 text-ink-900 dark:bg-ink-800 dark:text-ink-50'
-          : 'text-ink-500 hover:bg-ink-100 hover:text-ink-800 dark:text-ink-400 dark:hover:bg-ink-800 dark:hover:text-ink-100'
+          ? 'border-arc-500 text-ink-900 dark:text-white'
+          : 'border-transparent text-ink-500 hover:text-ink-800 dark:text-[#969696] dark:hover:text-white'
       }`}
     >
       <Icon name={icon} className="size-3.5" />
-      {/* In a narrow panel only the open tab spells its name; the rest are their icons. */}
       <span className={compact && !active ? 'sr-only @min-[30rem]:not-sr-only' : ''}>{label}</span>
-      {count ? <span className="rounded bg-ink-200 px-1 text-[0.6rem] tabular-nums text-ink-600 dark:bg-ink-700 dark:text-ink-300">{count}</span> : null}
-      {dot && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-amber-500" aria-hidden />}
+      {count ? <span className="rounded-full bg-arc-600/15 px-1.5 text-[10px] tabular-nums text-arc-700 dark:bg-[#04395e] dark:text-white">{count}</span> : null}
+      {dot && <span className="absolute right-1 top-1.5 size-1.5 rounded-full bg-amber-500" aria-hidden />}
     </button>
   )
 }
@@ -209,11 +208,11 @@ function CodePanel({ conversation, tab }: { conversation: Conversation | null; t
   return (
     <aside
       style={{ width }}
-      className="@container relative flex max-w-full shrink-0 flex-col border-l border-ink-200 bg-white xl:max-w-[calc(100%-22rem)] dark:border-ink-800 dark:bg-ink-900 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 max-xl:max-w-[calc(100%-2rem)] max-xl:shadow-2xl max-xl:shadow-ink-950/20 dark:max-xl:shadow-black/50"
+      className="@container relative flex max-w-full shrink-0 flex-col border-l border-ink-200 bg-ink-50 xl:max-w-[calc(100%-22rem)] dark:border-ink-800 dark:bg-ink-950 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 max-xl:max-w-[calc(100%-2rem)] max-xl:shadow-2xl max-xl:shadow-black/30 dark:max-xl:shadow-black/60"
       aria-label="Session panel"
     >
       <Resizer />
-      <div className="flex h-11 shrink-0 items-center gap-0.5 overflow-hidden border-b border-ink-200 px-2 dark:border-ink-800" role="tablist" aria-label="Panels">
+      <div className="flex h-8 shrink-0 items-stretch gap-0.5 overflow-hidden border-b border-ink-200 px-2 dark:border-ink-800" role="tablist" aria-label="Panels">
         {CODE_TABS.map((id) => (
           <Tab
             key={id}
@@ -227,7 +226,9 @@ function CodePanel({ conversation, tab }: { conversation: Conversation | null; t
             compact
           />
         ))}
-        <IconButton icon="x" label="Close panel" onClick={() => setRightPanel(null)} className="ml-auto" />
+        <div className="ml-auto flex items-center">
+          <IconButton icon="x" label="Close panel" onClick={() => setRightPanel(null)} className="!size-[22px]" />
+        </div>
       </div>
       <div id="code-panel-body" className="min-h-0 flex-1 overflow-hidden" role="tabpanel" aria-labelledby={`panel-tab-code-${tab}`}>
         <PanelSlot name="session" active={tab === 'session'}><SessionPanel conversation={conversation} /></PanelSlot>
@@ -248,13 +249,15 @@ function ChatPanel({ conversation, tab }: { conversation: Conversation | null; t
 
   return (
     <aside
-      className="flex w-[360px] max-w-full shrink-0 flex-col border-l border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-900 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 max-xl:shadow-2xl max-xl:shadow-ink-950/20 dark:max-xl:shadow-black/50"
+      className="flex w-[340px] max-w-full shrink-0 flex-col border-l border-ink-200 bg-ink-50 dark:border-ink-800 dark:bg-ink-950 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 max-xl:shadow-2xl max-xl:shadow-black/30 dark:max-xl:shadow-black/60"
       aria-label="Thread panel"
     >
-      <div className="flex h-11 shrink-0 items-center gap-0.5 border-b border-ink-200 px-2 dark:border-ink-800" role="tablist" aria-label="Panels">
+      <div className="flex h-8 shrink-0 items-stretch gap-0.5 border-b border-ink-200 px-2 dark:border-ink-800" role="tablist" aria-label="Panels">
         <Tab id="mining" group="chat" active={tab === 'mining'} label="Mining" icon="pickaxe" />
         <Tab id="context" group="chat" active={tab === 'context'} label="Context" icon="info" count={pins} />
-        <IconButton icon="x" label="Close panel" onClick={() => setRightPanel(null)} className="ml-auto" />
+        <div className="ml-auto flex items-center">
+          <IconButton icon="x" label="Close panel" onClick={() => setRightPanel(null)} className="!size-[22px]" />
+        </div>
       </div>
       <div id="chat-panel-body" className="min-h-0 flex-1 overflow-hidden" role="tabpanel" aria-labelledby={`panel-tab-chat-${tab}`}>
         <PanelSlot name="mining" active={tab === 'mining'}><MiningPanel conversation={conversation} /></PanelSlot>

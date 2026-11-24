@@ -165,6 +165,27 @@ pub struct CatalogEntry {
     pub gated: bool,
     pub pipeline_tag: Option<String>,
     pub trending_score: Option<f64>,
+    #[serde(default)]
+    pub base_model: Option<String>,
+    #[serde(default)]
+    pub creator: Option<String>,
+    #[serde(default)]
+    pub architecture: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<u64>,
+    #[serde(default)]
+    pub context_length: Option<u64>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// Binary image bytes fetched through the catalog proxy (organization/user avatar or README media).
+#[derive(Clone, Debug)]
+pub struct CatalogImage {
+    pub content_type: String,
+    pub bytes: bytes::Bytes,
 }
 
 /// One downloadable file.
@@ -335,6 +356,8 @@ pub struct Catalog {
     http: reqwest::Client,
     searches: RequestCache<(String, usize, String, String), Vec<CatalogEntry>>,
     repositories: RequestCache<(String, String), CatalogRepo>,
+    avatars: RequestCache<String, Option<CatalogImage>>,
+    images: RequestCache<String, CatalogImage>,
 }
 
 impl Catalog {
@@ -350,6 +373,8 @@ impl Catalog {
                 .expect("http client builds"),
             searches: RequestCache::new(Duration::from_secs(30), 64),
             repositories: RequestCache::new(Duration::from_secs(60), 32),
+            avatars: RequestCache::new(Duration::from_secs(3600), 128),
+            images: RequestCache::new(Duration::from_secs(1800), 96),
         }
     }
 
@@ -420,7 +445,7 @@ impl Catalog {
         if let Some(field) = sort.field(query) {
             params.extend([("sort", field), ("direction", "-1")]);
         }
-        for field in ["tags", "gated", "downloads", "likes", "lastModified", "pipeline_tag", "trendingScore"] {
+        for field in ["tags", "gated", "downloads", "likes", "lastModified", "pipeline_tag", "trendingScore", "cardData", "gguf"] {
             params.push(("expand[]", field));
         }
         let response = self
@@ -479,25 +504,37 @@ impl Catalog {
         // Largest first: within one repository, size tracks quality, and the top of the list is
         // where someone with a big machine should be looking.
         all_files.sort_by_key(|f| std::cmp::Reverse(f.size));
+        let has_mmproj =
+            all_files.iter().any(|f| f.path.rsplit('/').next().unwrap_or(&f.path).to_ascii_lowercase().starts_with("mmproj"));
         let files: Vec<_> = all_files.iter().filter(|f| f.path.to_ascii_lowercase().ends_with(".gguf")).cloned().collect();
         let mut variants = gguf_variants(&files);
         if is_mlx && let Some(variant) = mlx_variant(all_files, info.config.as_ref()) {
             variants.push(variant);
         }
-        let gguf = info.gguf.unwrap_or_default();
         let config = info.config.unwrap_or_default();
-        let card = info.card_data.unwrap_or_default();
-        let entry = info.model.entry(repo_id.to_string());
+        let license =
+            info.model.card_data.as_ref().and_then(|card| card.license.clone()).or_else(|| license_from_tags(&info.model.tags));
+        let mut entry = info.model.entry(repo_id.to_string());
+        let architecture = entry.architecture.take().or(config.model_type);
+        let parameters = entry.parameters.take().or_else(|| info.safetensors.and_then(|t| t.total));
+        let context_length = entry.context_length.take().or(config.max_position_embeddings);
+        if has_mmproj && !entry.capabilities.iter().any(|c| c == "vision") {
+            entry.capabilities.insert(0, "vision".into());
+        }
+        entry.architecture = architecture.clone();
+        entry.parameters = parameters;
+        entry.context_length = context_length;
+        let base_model = entry.base_model.clone();
 
         Ok(CatalogRepo {
             id: entry.id.clone(),
             revision: info.sha,
             gated: entry.gated,
-            base_model: card.base_model.and_then(BaseModel::first),
-            architecture: gguf.architecture.or(config.model_type),
-            parameters: gguf.total.or_else(|| info.safetensors.and_then(|t| t.total)),
-            context_length: gguf.context_length.or(config.max_position_embeddings),
-            license: card.license,
+            base_model,
+            architecture,
+            parameters,
+            context_length,
+            license,
             variants,
             entry,
             files,
@@ -576,6 +613,153 @@ impl Catalog {
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
     }
+
+    /// Resolve an organization or user avatar on Hugging Face and return its bytes.
+    pub async fn avatar(&self, owner: &str) -> Result<Option<CatalogImage>> {
+        let valid = safe_component(owner)
+            && !owner.starts_with('.')
+            && owner.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c));
+        if !valid {
+            return Err(Error::bad_request("Invalid catalog owner"));
+        }
+        self.avatars.load(owner.to_ascii_lowercase(), || self.fetch_avatar(owner)).await
+    }
+
+    async fn fetch_avatar(&self, owner: &str) -> Result<Option<CatalogImage>> {
+        #[derive(Deserialize)]
+        struct RawAvatar {
+            #[serde(default, rename = "avatarUrl")]
+            avatar_url: Option<String>,
+        }
+
+        let mut avatar_url = None;
+        for kind in ["organizations", "users"] {
+            let url = self.url(["api", kind, owner, "avatar"])?;
+            let response = self
+                .authorized(self.http.get(url.clone()))
+                .send()
+                .await
+                .map_err(|e| Error::Catalog { message: format!("{url}: {e}") })?;
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                continue;
+            }
+            let response = check(response, url.as_str()).await?;
+            let raw: RawAvatar = decode(response, url.as_str()).await?;
+            if let Some(found) = raw.avatar_url.filter(|u| !u.trim().is_empty()) {
+                avatar_url = Some(found);
+                break;
+            }
+        }
+        let Some(raw_url) = avatar_url else { return Ok(None) };
+        let base = reqwest::Url::parse(&self.endpoint).map_err(|e| Error::Catalog { message: e.to_string() })?;
+        let resolved = base.join(&raw_url).map_err(|e| Error::Catalog { message: e.to_string() })?;
+        if !self.allowed_image_url(&resolved)? {
+            return Ok(None);
+        }
+        const MAX_AVATAR_BYTES: usize = 2 * 1024 * 1024;
+        self.fetch_binary_image(&resolved, MAX_AVATAR_BYTES).await.map(Some)
+    }
+
+    /// Fetch an image referenced by a repository README (relative asset or allowed HTTPS URL).
+    pub async fn image(&self, repo_id: Option<&str>, revision: Option<&str>, src: &str) -> Result<CatalogImage> {
+        let resolved = self.resolve_image_url(repo_id, revision, src)?;
+        if !self.allowed_image_url(&resolved)? {
+            return Err(Error::bad_request("Image host is not permitted by catalog policy"));
+        }
+        const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+        self.images.load(resolved.to_string(), || self.fetch_binary_image(&resolved, MAX_IMAGE_BYTES)).await
+    }
+
+    fn resolve_image_url(&self, repo_id: Option<&str>, revision: Option<&str>, src: &str) -> Result<reqwest::Url> {
+        let trimmed = src.trim();
+        if trimmed.is_empty() {
+            return Err(Error::bad_request("Missing image source"));
+        }
+        let endpoint = reqwest::Url::parse(&self.endpoint).map_err(|e| Error::Catalog { message: e.to_string() })?;
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            let mut parsed = reqwest::Url::parse(trimmed).map_err(|_| Error::bad_request("Invalid image URL"))?;
+            // Rewrite Hugging Face `/blob/<rev>/...` viewer URLs into `/resolve/<rev>/...` raw URLs.
+            let is_hub = parsed.origin() == endpoint.origin() || matches!(parsed.host_str(), Some("huggingface.co" | "hf.co"));
+            if is_hub
+                && let Some(segments) = parsed.path_segments().map(|s| s.map(str::to_string).collect::<Vec<_>>())
+                && segments.len() >= 5
+                && matches!(segments[2].as_str(), "blob" | "raw")
+                && let Ok(mut out) = parsed.path_segments_mut()
+            {
+                out.clear();
+                out.push(&segments[0]);
+                out.push(&segments[1]);
+                out.push("resolve");
+                for rest in &segments[3..] {
+                    out.push(rest);
+                }
+            }
+            return Ok(parsed);
+        }
+        let repo_id = repo_id.ok_or_else(|| Error::bad_request("Relative image path requires a repository id"))?;
+        let (author, name) =
+            split_repo(repo_id).ok_or_else(|| Error::bad_request("Expected a Hugging Face repository in author/model form"))?;
+        let clean = trimmed.split(['?', '#']).next().unwrap_or(trimmed).trim_start_matches("./").trim_start_matches('/');
+        let parts: Vec<&str> = clean.split('/').filter(|p| !p.is_empty()).collect();
+        if parts.is_empty() || !parts.iter().copied().all(safe_component) {
+            return Err(Error::bad_request("Invalid relative image path"));
+        }
+        self.url([author, name, "resolve", revision.unwrap_or("main")].into_iter().chain(parts))
+    }
+
+    fn allowed_image_url(&self, url: &reqwest::Url) -> Result<bool> {
+        let endpoint = reqwest::Url::parse(&self.endpoint).map_err(|e| Error::Catalog { message: e.to_string() })?;
+        if url.origin() == endpoint.origin() {
+            return Ok(true);
+        }
+        if url.scheme() != "https" {
+            return Ok(false);
+        }
+        let Some(host) = url.host_str() else { return Ok(false) };
+        let host = host.to_ascii_lowercase();
+        Ok(host == "huggingface.co"
+            || host.ends_with(".huggingface.co")
+            || host == "hf.co"
+            || host.ends_with(".hf.co")
+            || host == "raw.githubusercontent.com"
+            || host == "user-images.githubusercontent.com"
+            || host == "avatars.githubusercontent.com"
+            || host == "camo.githubusercontent.com"
+            || host == "objects.githubusercontent.com"
+            || host == "github.com"
+            || host == "img.shields.io")
+    }
+
+    async fn fetch_binary_image(&self, url: &reqwest::Url, max_bytes: usize) -> Result<CatalogImage> {
+        let endpoint = reqwest::Url::parse(&self.endpoint).map_err(|e| Error::Catalog { message: e.to_string() })?;
+        let builder = self.http.get(url.clone());
+        let builder = if url.origin() == endpoint.origin() { self.authorized(builder) } else { builder };
+        let response = builder.send().await.map_err(|e| Error::Catalog { message: format!("{url}: {e}") })?;
+        let mut response = check(response, url.as_str()).await?;
+        let header_mime = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(';').next())
+            .map(|v| v.trim().to_ascii_lowercase());
+        let guessed = mime_guess::from_path(url.path()).first().map(|m| m.essence_str().to_string());
+        let content_type = match header_mime.as_deref() {
+            Some(m) if m.starts_with("image/") => m.to_string(),
+            Some("application/octet-stream") | None => match guessed {
+                Some(m) if m.starts_with("image/") => m,
+                _ => return Err(Error::Catalog { message: format!("{url}: response is not an image") }),
+            },
+            Some(other) => return Err(Error::Catalog { message: format!("{url}: expected image/*, got {other}") }),
+        };
+        let mut buf = bytes::BytesMut::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| Error::Catalog { message: format!("{url}: {e}") })? {
+            if buf.len() + chunk.len() > max_bytes {
+                return Err(Error::Catalog { message: format!("{url}: image exceeds {} MiB limit", max_bytes >> 20) });
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        Ok(CatalogImage { content_type, bytes: buf.freeze() })
+    }
 }
 
 /// Turn a non-2xx into an error that names what to do about it.
@@ -652,6 +836,73 @@ struct RawModel {
     pipeline_tag: Option<String>,
     #[serde(default, rename = "trendingScore")]
     trending_score: Option<f64>,
+    #[serde(default, rename = "cardData")]
+    card_data: Option<RawCardData>,
+    #[serde(default)]
+    gguf: Option<RawGguf>,
+}
+
+fn base_model_from_tags(tags: &[String]) -> Option<String> {
+    let mut fallback = None;
+    for tag in tags {
+        let Some(rest) = tag.strip_prefix("base_model:") else { continue };
+        if split_repo(rest).is_some() {
+            return Some(rest.to_string());
+        }
+        if fallback.is_none()
+            && let Some(inner) = rest
+                .strip_prefix("quantized:")
+                .or_else(|| rest.strip_prefix("finetune:"))
+                .or_else(|| rest.strip_prefix("adapter:"))
+                .or_else(|| rest.strip_prefix("merge:"))
+            && split_repo(inner).is_some()
+        {
+            fallback = Some(inner.to_string());
+        }
+    }
+    fallback
+}
+
+fn license_from_tags(tags: &[String]) -> Option<String> {
+    tags.iter().find_map(|tag| tag.strip_prefix("license:").map(str::to_string))
+}
+
+fn infer_capabilities(pipeline_tag: Option<&str>, tags: &[String], chat_template: Option<&str>) -> Vec<String> {
+    let has_tag = |needle: &str| tags.iter().any(|t| t.eq_ignore_ascii_case(needle));
+    let tpl = chat_template.unwrap_or_default();
+    let mut out = Vec::new();
+    if pipeline_tag == Some("image-text-to-text")
+        || has_tag("image-text-to-text")
+        || has_tag("vision")
+        || has_tag("multimodal")
+        || has_tag("vlm")
+    {
+        out.push("vision".into());
+    }
+    if has_tag("tool-calling")
+        || has_tag("function-calling")
+        || has_tag("tool-use")
+        || has_tag("tools")
+        || tpl.contains("if tools")
+        || tpl.contains("for tool in tools")
+        || tpl.contains("<|message_tool|>")
+        || tpl.contains("<tool_call>")
+        || tpl.contains("tool_calls")
+        || tpl.contains("[TOOL_CALLS]")
+    {
+        out.push("tools".into());
+    }
+    if has_tag("reasoning")
+        || has_tag("thinking")
+        || has_tag("cot")
+        || tpl.contains("reasoning_effort")
+        || tpl.contains("<think>")
+        || tpl.contains("enable_thinking")
+        || tpl.contains("<|thought|>")
+    {
+        out.push("reasoning".into());
+    }
+    out
 }
 
 impl RawModel {
@@ -663,15 +914,41 @@ impl RawModel {
     }
 
     fn entry(self, fallback: String) -> CatalogEntry {
+        let id = self.id.or(self.model_id).unwrap_or(fallback);
+        let card = self.card_data.unwrap_or_default();
+        let gguf = self.gguf.unwrap_or_default();
+        let mut merged_tags = self.tags;
+        for extra in card.tags.unwrap_or_default() {
+            if !merged_tags.iter().any(|t| t.eq_ignore_ascii_case(&extra)) {
+                merged_tags.push(extra);
+            }
+        }
+        let pipeline_tag = self.pipeline_tag.or(card.pipeline_tag);
+        let base_model = card.base_model.and_then(BaseModel::first).or_else(|| base_model_from_tags(&merged_tags));
+        let creator = base_model
+            .as_deref()
+            .and_then(split_repo)
+            .map(|(owner, _)| owner.to_string())
+            .or_else(|| split_repo(&id).map(|(owner, _)| owner.to_string()));
+        let capabilities = infer_capabilities(pipeline_tag.as_deref(), &merged_tags, gguf.chat_template.as_deref());
+        let summary = card.model_summary.or(card.description).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
         CatalogEntry {
-            id: self.id.or(self.model_id).unwrap_or(fallback),
+            id,
             downloads: self.downloads,
             likes: self.likes,
-            tags: self.tags,
+            tags: merged_tags,
             last_modified: self.last_modified,
             gated: self.gated.map(|g| g.is_gated()).unwrap_or(false),
-            pipeline_tag: self.pipeline_tag,
+            pipeline_tag,
             trending_score: self.trending_score,
+            base_model,
+            creator,
+            architecture: gguf.architecture,
+            parameters: gguf.total,
+            context_length: gguf.context_length,
+            capabilities,
+            summary,
         }
     }
 }
@@ -700,9 +977,6 @@ struct RawRepoInfo {
     model: RawModel,
     #[serde(default)]
     sha: Option<String>,
-    #[serde(default, rename = "cardData")]
-    card_data: Option<RawCardData>,
-    gguf: Option<RawGguf>,
     config: Option<RawConfig>,
     safetensors: Option<RawWeights>,
     library_name: Option<String>,
@@ -713,6 +987,10 @@ struct RawCardData {
     #[serde(default)]
     base_model: Option<BaseModel>,
     license: Option<String>,
+    pipeline_tag: Option<String>,
+    tags: Option<Vec<String>>,
+    model_summary: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -720,6 +998,7 @@ struct RawGguf {
     architecture: Option<String>,
     context_length: Option<u64>,
     total: Option<u64>,
+    chat_template: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1074,5 +1353,74 @@ mod tests {
             catalog.download_url("org/repo", "abc123", "model-Q4_K_M.gguf"),
             "https://example.test/org/repo/resolve/abc123/model-Q4_K_M.gguf"
         );
+    }
+
+    #[tokio::test]
+    async fn avatars_readme_images_and_capabilities_resolve_through_catalog() {
+        let png: &'static [u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR";
+        let app = axum::Router::new()
+            .route(
+                "/api/models",
+                get(|| async {
+                    Json(serde_json::json!([{
+                        "id": "lmstudio-community/Inkling-2-Mini-GGUF",
+                        "downloads": 31613,
+                        "likes": 8,
+                        "tags": ["gguf", "base_model:thinkingmachines/Inkling-2-Mini", "image-text-to-text"],
+                        "cardData": { "model_summary": "Open-weight multimodal mixture-of-experts model." },
+                        "gguf": {
+                            "total": 26_400_000_000u64,
+                            "architecture": "inkling2_loop",
+                            "context_length": 1_048_576u64,
+                            "chat_template": "{% if tools %}<|message_tool|>{% endif %}{{ reasoning_effort }}"
+                        }
+                    }]))
+                }),
+            )
+            .route(
+                "/api/organizations/{owner}/avatar",
+                get(|axum::extract::Path(owner): axum::extract::Path<String>| async move {
+                    if owner == "thinkingmachines" {
+                        (axum::http::StatusCode::OK, Json(serde_json::json!({ "avatarUrl": "/avatars/tm.png" })))
+                    } else {
+                        (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({})))
+                    }
+                }),
+            )
+            .route("/avatars/tm.png", get(move || async move { ([(axum::http::header::CONTENT_TYPE, "image/png")], png) }))
+            .route(
+                "/thinkingmachines/Inkling-2-Mini/resolve/main/assets/arch.png",
+                get(move || async move { ([(axum::http::header::CONTENT_TYPE, "image/png")], png) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let endpoint = format!("http://{addr}");
+        let catalog = Catalog::new(&endpoint, None);
+
+        let entries = catalog.search("inkling", 10).await.expect("search");
+        assert_eq!(entries[0].creator.as_deref(), Some("thinkingmachines"));
+        assert_eq!(entries[0].base_model.as_deref(), Some("thinkingmachines/Inkling-2-Mini"));
+        assert_eq!(entries[0].architecture.as_deref(), Some("inkling2_loop"));
+        assert_eq!(entries[0].parameters, Some(26_400_000_000));
+        assert_eq!(entries[0].capabilities, vec!["vision", "tools", "reasoning"]);
+        assert_eq!(entries[0].summary.as_deref(), Some("Open-weight multimodal mixture-of-experts model."));
+
+        let avatar = catalog.avatar("thinkingmachines").await.expect("avatar").expect("present");
+        assert_eq!(avatar.content_type, "image/png");
+        assert_eq!(avatar.bytes.as_ref(), png);
+
+        let relative =
+            catalog.image(Some("thinkingmachines/Inkling-2-Mini"), Some("main"), "./assets/arch.png").await.expect("relative image");
+        assert_eq!(relative.bytes.as_ref(), png);
+
+        let blob_url = format!("{endpoint}/thinkingmachines/Inkling-2-Mini/blob/main/assets/arch.png");
+        let rewritten = catalog.image(None, None, &blob_url).await.expect("blob url rewritten to resolve");
+        assert_eq!(rewritten.bytes.as_ref(), png);
+
+        let blocked = catalog.image(None, None, "http://169.254.169.254/latest/meta-data").await;
+        assert!(blocked.is_err(), "untrusted image hosts must be rejected");
     }
 }

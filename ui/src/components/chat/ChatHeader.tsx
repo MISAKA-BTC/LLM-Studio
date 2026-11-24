@@ -208,16 +208,21 @@ function ChatSideHeader({ conversation, generating }: { conversation: Conversati
   useEffect(() => setRenaming(false), [conversation?.id])
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-ink-200 px-3 dark:border-ink-800">
-      <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        {conversation?.starred && <Icon name="star" className="size-3.5 shrink-0 text-amber-500" />}
+    <header className="flex h-8 shrink-0 items-center gap-2 border-b border-ink-200 bg-ink-50/40 px-3 dark:border-ink-800 dark:bg-ink-900">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs">
+        <span className="hidden items-center gap-1 text-ink-400 sm:inline-flex dark:text-ink-500">
+          <Icon name="chat" className="size-3" />
+          <span>chat</span>
+          <Icon name="chevron" className="size-3 opacity-60" />
+        </span>
+        {conversation?.starred && <Icon name="star" className="size-3 shrink-0 text-amber-500" />}
         {/* The title keeps its width up to its cap; the model pill is what gives way first. */}
-        <div className={`flex min-w-0 ${renaming ? 'flex-1' : 'max-w-[45%] flex-none'}`}>
+        <div className={`flex min-w-0 ${renaming ? 'flex-1' : 'max-w-[42%] flex-none'}`}>
           <ThreadTitle conversation={conversation} renaming={renaming} setRenaming={setRenaming} />
         </div>
         {!renaming && (
           <>
-            <span className="h-4 w-px shrink-0 bg-ink-200 dark:bg-ink-700" aria-hidden />
+            <Icon name="chevron" className="size-3 shrink-0 text-ink-300 dark:text-ink-600" aria-hidden />
             <div className="flex min-w-0 shrink">
               <ModelStatusPill />
             </div>

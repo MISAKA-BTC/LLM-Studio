@@ -102,8 +102,8 @@ function UserMessage({ message, editing, actions }: MessageProps) {
         <EditBox initial={message.content} onCancel={actions.cancelEdit} onSave={(content) => actions.saveEdit(message.id, content)} />
       ) : (
         message.content && (
-          <div className="max-w-[85%] rounded-2xl bg-ink-100 px-4 py-2.5 text-ink-900 dark:bg-ink-800 dark:text-ink-50">
-            <p className="whitespace-pre-wrap break-words text-[0.94rem] leading-relaxed">{message.content}</p>
+          <div className="max-w-[88%] rounded-[5px] border border-ink-200 bg-ink-50 px-3.5 py-2 text-ink-900 dark:border-ink-700/80 dark:bg-ink-850 dark:text-[#e1e1e1]">
+            <p className="whitespace-pre-wrap break-words text-[0.875rem] leading-relaxed">{message.content}</p>
           </div>
         )
       )}
@@ -140,11 +140,11 @@ function EditBox({ initial, onCancel, onSave }: { initial: string; onCancel: () 
   }, [draft])
 
   return (
-    <div className="w-full max-w-[85%] rounded-2xl border border-arc-500/60 bg-white p-2 ring-4 ring-arc-500/10 dark:bg-ink-900">
+    <div className="w-full max-w-[88%] rounded-[5px] border border-arc-500 bg-white p-2 dark:bg-ink-850">
       <textarea
         ref={field}
         rows={1}
-        className="block w-full resize-none bg-transparent px-2 py-1 text-[0.94rem] leading-relaxed outline-none"
+        className="block w-full resize-none bg-transparent px-2 py-1 text-[0.875rem] leading-relaxed outline-none"
         value={draft}
         aria-label="Edit message"
         onChange={(event) => setDraft(event.target.value)}
@@ -192,15 +192,15 @@ function AssistantMessage({ message, agent, last, generating, live, showAvatar, 
   const canAct = last && !generating
 
   return (
-    <div id={`message-${message.id}`} className="group flex gap-3">
+    <div id={`message-${message.id}`} className="group flex gap-2.5">
       {showAvatar ? (
         <img
           src={studioIcon}
           alt="LLM Studio"
-          className="mt-0.5 size-7 shrink-0 rounded-lg bg-white object-contain p-0.5 ring-1 ring-ink-200 dark:bg-ink-100 dark:ring-ink-700"
+          className="mt-0.5 size-6 shrink-0 rounded-[4px] border border-ink-200 bg-ink-50 object-contain p-0.5 dark:border-ink-700 dark:bg-ink-850"
         />
       ) : (
-        <div className="w-7 shrink-0" aria-hidden />
+        <div className="w-6 shrink-0" aria-hidden />
       )}
 
       <div className="min-w-0 flex-1 pt-0.5">

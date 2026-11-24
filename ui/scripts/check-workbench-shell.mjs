@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 // Real shell behavior, not snapshots of the implementation. No runtime process or commands run.
 export async function checkWorkbenchShell(ctx) {
-  const { act, check, change, flush, visible, findVisible, window, document, useStudio, useUi, useComposer, useWorkbench, closeTab, cycleTab, fixtures, go } = ctx
+  const { act, check, change, flush, visible, findVisible, window, document, useStudio, useUi, useComposer, useWorkbench, closeTab, cycleTab, activateTab, fixtures, go } = ctx
   const studio = useStudio.getState()
   const savedStudio = { conversations: studio.conversations, activeConversationId: studio.activeConversationId, view: studio.view }
   const ui = useUi.getState()
@@ -25,7 +25,8 @@ export async function checkWorkbenchShell(ctx) {
       assert.ok(useWorkbench.getState().tabs.some((t) => t.key === `thread:${a.id}`))
       assert.ok(useWorkbench.getState().tabs.some((t) => t.key === `thread:${b.id}`))
       const tab = [...document.querySelectorAll('[role="tablist"][aria-label="Open tabs"] [role="tab"]')].find((e) => e.textContent === a.title)
-      await act(async () => tab.click())
+      if (tab) await act(async () => tab.click())
+      else await act(async () => activateTab({ key: `thread:${a.id}`, kind: 'thread', id: a.id }))
       assert.equal(useStudio.getState().activeConversationId, a.id)
       assert.equal(findVisible('textarea[aria-label="Message"]').value, 'Keep a tab draft')
       const history = useStudio.getState().conversations

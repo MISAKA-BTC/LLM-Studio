@@ -20,6 +20,7 @@ export type RightPanel = 'session' | 'changes' | 'terminal' | 'files' | 'mining'
  * its `mode` says (`agent` → Code), and the window shows one side at a time.
  */
 export type AppMode = 'chat' | 'code'
+export type ModelsTab = 'installed' | 'discover'
 
 type UiState = {
   appMode: AppMode
@@ -48,10 +49,13 @@ type UiState = {
   thinking: boolean
   /** Folders the agent was pointed at, most recent first. */
   recentWorkspaces: string[]
+  /** Active sub-tab in Models view (Installed library vs Model Search). */
+  modelsTab: ModelsTab
 
   /** Only the flag. Switching sides — remembering and restoring each side's thread — is
    *  `switchAppMode` in `components/shell/actions.ts`. */
   setAppMode: (mode: AppMode) => void
+  setModelsTab: (tab: ModelsTab) => void
   rememberThread: (mode: AppMode, id: string | null) => void
   toggleProject: (path: string) => void
   setSidebarOpen: (open: boolean) => void
@@ -93,8 +97,10 @@ export const useUi = create<UiState>()(
       composerDraft: null,
       thinking: true,
       recentWorkspaces: [],
+      modelsTab: 'installed',
 
       setAppMode: (appMode) => set({ appMode }),
+      setModelsTab: (modelsTab) => set({ modelsTab }),
       rememberThread: (mode, id) => set((s) => (s.lastThread[mode] === id ? {} : { lastThread: { ...s.lastThread, [mode]: id } })),
       toggleProject: (path) =>
         set((s) => ({

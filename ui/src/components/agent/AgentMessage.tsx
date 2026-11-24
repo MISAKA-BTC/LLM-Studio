@@ -413,7 +413,7 @@ export function ToolCallCard({ segment, call, streaming }: { segment: ToolSegmen
         </button>
         {error && <p className={`ml-7 mt-0.5 whitespace-pre-wrap text-xs ${errorTone}`}>{error}</p>}
         {open && hasDetails && (
-          <div className="mb-1 ml-7 mt-1 overflow-hidden rounded-lg border border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-900">
+          <div className="mb-1 ml-6 mt-1 overflow-hidden rounded-[4px] border border-ink-200 bg-ink-50/40 dark:border-ink-800 dark:bg-ink-950">
             <Details name={name} args={args} call={call} status={status} />
           </div>
         )}
@@ -423,8 +423,8 @@ export function ToolCallCard({ segment, call, streaming }: { segment: ToolSegmen
 
   return (
     <div
-      className={`overflow-hidden rounded-xl border bg-white text-[0.8rem] dark:bg-ink-900 ${
-        awaiting ? 'border-amber-300 shadow-sm shadow-amber-900/5 dark:border-amber-700/60' : 'border-ink-200 dark:border-ink-800'
+      className={`overflow-hidden rounded-[4px] border bg-ink-50/40 text-[0.8rem] dark:bg-ink-950 ${
+        awaiting ? 'border-amber-400 dark:border-amber-600/80' : 'border-ink-200 dark:border-ink-800'
       }`}
     >
       <div className="flex min-w-0 items-center gap-2 px-3 py-1.5">

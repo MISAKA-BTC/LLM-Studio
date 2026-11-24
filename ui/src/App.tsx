@@ -24,7 +24,7 @@ import { useSideSync } from './components/shell/sideSync'
 import { useGlobalShortcuts } from './components/shell/useGlobalShortcuts'
 import { RetainedView } from './components/shell/RetainedView'
 import { QuickOpen } from './components/shell/QuickOpen'
-import { WorkbenchTabs } from './components/shell/WorkbenchTabs'
+import { TitleBar } from './components/shell/TitleBar'
 import { useWorkbenchSync } from './components/shell/workbenchState'
 import { useCodeWatchers } from './components/code/watchers'
 import { Icon } from './components/common'
@@ -93,7 +93,8 @@ export default function App() {
   useWorkbenchSync()
 
   return (
-    <div className="flex h-full flex-col overflow-hidden" onDragOver={preventFileNavigation} onDrop={preventFileNavigation}>
+    <div className="flex h-full flex-col overflow-hidden bg-white dark:bg-ink-900" onDragOver={preventFileNavigation} onDrop={preventFileNavigation}>
+      <TitleBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar />
         {/* `min-h-0` is the whole fix for a page that scrolled forever. A flex item defaults to
@@ -105,8 +106,7 @@ export default function App() {
             shell already clips, and saying so here keeps a future overflowing child from escaping
             the same way. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <WorkbenchTabs />
-        <main id="workbench-content" className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <main id="workbench-content" className="min-h-0 min-w-0 flex-1 overflow-hidden">
           <ViewSlot view="chat" active={view === 'chat'}><ChatView /></ViewSlot>
           <ViewSlot view="models" active={view === 'models'}><ModelsView /></ViewSlot>
           <ViewSlot view="image" active={view === 'image'}><ImageView /></ViewSlot>
@@ -168,11 +168,12 @@ function ViewSlot({ view, active, children }: { view: View; active: boolean; chi
  */
 function Page({ view, note, children }: { view: View; note: string; children: ReactNode }) {
   return (
-    <div className="grid h-full grid-rows-[auto_minmax(0,1fr)]">
-      <header className="flex h-11 min-w-0 items-center gap-2 border-b border-ink-200 px-4 dark:border-ink-800">
-        <Icon name={VIEW_ICONS[view]} className="size-4 shrink-0 text-ink-400 dark:text-ink-500" />
-        <h1 className="shrink-0 text-[0.85rem] font-semibold">{VIEW_LABELS[view]}</h1>
-        <span className="hidden min-w-0 truncate text-[0.75rem] text-ink-400 md:inline dark:text-ink-500">{note}</span>
+    <div className="grid h-full grid-rows-[auto_minmax(0,1fr)] bg-white dark:bg-ink-900">
+      <header className="flex h-9 min-w-0 items-center gap-2 border-b border-ink-200 bg-ink-50/60 px-3.5 dark:border-ink-800 dark:bg-ink-950/60">
+        <Icon name={VIEW_ICONS[view]} className="size-3.5 shrink-0 text-arc-600 dark:text-arc-400" />
+        <h1 className="shrink-0 text-xs font-semibold uppercase tracking-wider text-ink-800 dark:text-ink-100">{VIEW_LABELS[view]}</h1>
+        <span className="text-ink-300 dark:text-ink-700" aria-hidden>/</span>
+        <span className="hidden min-w-0 truncate text-xs text-ink-500 md:inline dark:text-ink-400">{note}</span>
       </header>
       <div className="min-h-0">{children}</div>
     </div>
@@ -185,9 +186,9 @@ function Toasts() {
   if (toasts.length === 0) return null
 
   return (
-    // Above the status bar, not over it: the bar is where someone looks to see what just happened.
+    // VS Code notification toasts anchored cleanly above the 22px status bar.
     <div
-      className="pointer-events-none fixed bottom-9 right-3 z-50 flex max-h-[calc(100vh-4.5rem)] w-80 flex-col justify-end gap-2 overflow-y-auto"
+      className="pointer-events-none fixed bottom-7 right-3 z-50 flex max-h-[calc(100vh-4.5rem)] w-80 flex-col justify-end gap-1.5 overflow-y-auto"
       role="region"
       aria-label="Notifications"
       aria-live="polite"
@@ -196,30 +197,26 @@ function Toasts() {
         <div
           key={toast.id}
           role={toast.kind === 'error' ? 'alert' : 'status'}
-          className={`pop-in pointer-events-auto flex items-start gap-2 rounded-xl border bg-white px-3 py-2.5 text-[0.8rem] shadow-lg shadow-ink-950/10 dark:bg-ink-850 dark:shadow-black/40 ${
+          className={`pop-in pointer-events-auto flex items-start gap-2 rounded-[4px] border bg-ink-50 px-3 py-2 text-xs shadow-xl shadow-black/20 dark:bg-ink-850 dark:shadow-black/60 ${
             toast.kind === 'error'
-              ? 'border-red-300 text-red-700 dark:border-red-900 dark:text-red-300'
+              ? 'border-l-2 border-red-400 border-l-red-500 text-red-800 dark:border-[#454545] dark:border-l-red-500 dark:text-red-300'
               : toast.kind === 'success'
-                ? 'border-emerald-300 text-emerald-800 dark:border-emerald-900 dark:text-emerald-300'
-                : 'border-ink-200 text-ink-700 dark:border-ink-700 dark:text-ink-200'
+                ? 'border-l-2 border-emerald-400 border-l-emerald-500 text-emerald-900 dark:border-[#454545] dark:border-l-emerald-500 dark:text-emerald-300'
+                : 'border-l-2 border-ink-300 border-l-arc-500 text-ink-800 dark:border-[#454545] dark:border-l-arc-500 dark:text-[#cccccc]'
           }`}
         >
-          {toast.kind === 'error' && <Icon name="warning" className="mt-0.5 size-4 shrink-0" />}
-          {toast.kind === 'success' && <Icon name="circleCheck" className="mt-0.5 size-4 shrink-0" />}
-          {toast.kind === 'info' && <Icon name="info" className="mt-0.5 size-4 shrink-0 text-ink-400 dark:text-ink-500" />}
-          {/* The message scrolls inside the toast, and keeps its line breaks. An error stays until
-              it is dismissed, so the dismiss button is the only way off the screen — and a fifteen
-              line engine log grew the toast taller than the window, carried that button off the top
-              edge, and left the user with a notification that could not be closed at all. */}
+          {toast.kind === 'error' && <Icon name="warning" className="mt-0.5 size-3.5 shrink-0 text-red-500" />}
+          {toast.kind === 'success' && <Icon name="circleCheck" className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />}
+          {toast.kind === 'info' && <Icon name="info" className="mt-0.5 size-3.5 shrink-0 text-arc-500" />}
           <span className="max-h-40 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words leading-snug">{toast.text}</span>
           <button
             type="button"
-            className="-mr-1 -mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md opacity-60 transition-opacity hover:bg-ink-100 hover:opacity-100 dark:hover:bg-ink-800"
+            className="-mr-1 -mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-[3px] opacity-60 transition-opacity hover:bg-ink-200 hover:opacity-100 dark:hover:bg-[#3c3c3c]"
             aria-label="Dismiss"
             title="Dismiss"
             onClick={() => dismiss(toast.id)}
           >
-            <Icon name="x" className="size-3.5" />
+            <Icon name="x" className="size-3" />
           </button>
         </div>
       ))}

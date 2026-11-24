@@ -512,7 +512,7 @@ export const Composer = memo(function Composer({
       {conversation && followUps.length > 0 && (
         <ul aria-label="Queued follow-ups" aria-live="polite" className="mb-2 max-h-28 space-y-1 overflow-y-auto">
           {followUps.map((item) => (
-            <li key={item.id} className="flex items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-1 text-xs text-ink-600 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-300">
+            <li key={item.id} className="flex items-center gap-2 rounded-[4px] border border-ink-200 bg-ink-50 px-2.5 py-1 text-xs text-ink-600 dark:border-ink-700 dark:bg-ink-850 dark:text-[#cccccc]">
               <Icon name="clock" className="size-3.5 shrink-0 text-ink-400" />
               <span className="shrink-0 font-medium">{item.paused ? 'Send paused' : 'Queued'}</span>
               <span className="min-w-0 flex-1 truncate" title={item.text}>{item.text.trim() || item.attachments.map((file) => file.name).join(', ')}</span>
@@ -524,14 +524,14 @@ export const Composer = memo(function Composer({
       )}
       <div
         ref={card}
-        className={`@container rounded-2xl border bg-white shadow-sm transition-[border-color,box-shadow] dark:bg-ink-900 ${
+        className={`@container rounded-[6px] border bg-white transition-colors dark:bg-ink-850 ${
           focused
-            ? 'border-arc-500/70 ring-4 ring-arc-500/10 dark:border-arc-500/60'
-            : 'border-ink-200 shadow-ink-950/[0.03] dark:border-ink-700'
+            ? 'border-arc-500 dark:border-arc-500'
+            : 'border-ink-300 dark:border-ink-700'
         }`}
       >
         {draft.attachments.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+          <div className="flex flex-wrap gap-1.5 border-b border-ink-200/70 px-3 py-2 dark:border-ink-800">
             {draft.attachments.map((attachment) => (
               <AttachmentChip key={attachment.id} attachment={attachment} onRemove={() => removeAttachment(key, attachment.id)} />
             ))}
@@ -545,8 +545,8 @@ export const Composer = memo(function Composer({
           placeholder={placeholder}
           aria-label={mode === 'agent' ? 'Task for the agent' : 'Message'}
           spellCheck
-          className={`block w-full resize-none bg-transparent px-4 pt-3 text-[0.94rem] leading-6 text-ink-900 outline-none placeholder:text-ink-400 dark:text-ink-50 dark:placeholder:text-ink-500 ${
-            variant === 'hero' ? 'min-h-[4.5rem]' : ''
+          className={`block w-full resize-none bg-transparent px-3 py-2.5 text-[13.5px] leading-relaxed text-ink-900 outline-none placeholder:text-ink-400 dark:text-[#e1e1e1] dark:placeholder:text-ink-400 ${
+            variant === 'hero' ? 'min-h-[4.25rem]' : ''
           }`}
           onChange={(event) => {
             setText(key, event.target.value)
@@ -564,15 +564,7 @@ export const Composer = memo(function Composer({
           }}
         />
 
-        {/* The toolbar is laid out against the card's own width (a container query), not the
-            window's: the same card sits in the middle of an empty thread and beside a side panel.
-            Labels give way first, then the model's name; nothing wraps. */}
-        <div className="flex items-center gap-1 whitespace-nowrap px-2 pb-2 pt-1.5">
-          {/* Both sides may give way, the right much sooner: the model's name truncates first (its
-              chip stops at its own minimum), and only then the folder's name on the left. The right
-              side may shrink below its contents — a model id has no spaces, so its natural minimum is
-              the whole name — and clips rather than overflowing: unclipped, its chips used to spill
-              leftwards across the agent's controls on a narrow card. */}
+        <div className="flex items-center gap-1 whitespace-nowrap border-t border-ink-200/70 bg-ink-50/50 px-2 py-1.5 dark:border-ink-800 dark:bg-[#1e1e1e]">
           <div className="flex min-w-0 items-center gap-1">
             <IconButton icon="paperclip" label="Attach text files" onClick={() => fileInput.current?.click()} />
             <input
@@ -613,24 +605,26 @@ export const Composer = memo(function Composer({
             {canStop && (
               <button
                 type="button"
-                className="ml-1 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-ink-900 text-white transition-colors hover:bg-ink-700 dark:bg-ink-100 dark:text-ink-900 dark:hover:bg-white"
+                className="ml-1 inline-flex h-[26px] shrink-0 items-center gap-1 rounded-[3px] border border-red-400/60 bg-red-600 px-2 text-xs font-medium text-white transition-colors hover:bg-red-500"
                 onClick={stopHere}
                 aria-label={mode === 'agent' ? 'Stop the agent' : 'Stop generating'}
                 title="Stop (Esc)"
               >
-                <span className="size-2.5 rounded-[3px] bg-current" />
+                <span className="size-2 rounded-[1px] bg-current" />
+                <span className="hidden @xl:inline">Stop</span>
               </button>
             )}
             {(!canStop || canSend) && (
               <button
                 type="button"
-                className="ml-1 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-arc-600 text-white transition-colors hover:bg-arc-500 disabled:bg-ink-200 disabled:text-ink-400 dark:disabled:bg-ink-800 dark:disabled:text-ink-500"
+                className="ml-1 inline-flex h-[26px] shrink-0 items-center gap-1 rounded-[3px] bg-arc-600 px-2.5 text-xs font-medium text-white transition-colors hover:bg-arc-700 disabled:bg-ink-200 disabled:text-ink-400 dark:disabled:bg-[#313131] dark:disabled:text-ink-500"
                 onClick={() => void submit()}
                 disabled={!canSend}
                 aria-label={isCommand ? 'Run command' : willQueue ? 'Queue follow-up' : 'Send'}
                 title={isCommand ? 'Run the command (Enter)' : willQueue ? 'Queue follow-up (Enter)' : 'Send (Enter)'}
               >
-                <Icon name="arrowUp" className="size-4" />
+                <Icon name="arrowUp" className="size-3.5" />
+                <span className="hidden @xl:inline">Send</span>
               </button>
             )}
           </div>

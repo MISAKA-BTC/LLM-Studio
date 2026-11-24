@@ -29,20 +29,20 @@ function Card({ id, title, aside, children }: { id: string; title: string; aside
   const collapsed = useCodeUi((s) => s.collapsed.includes(id))
   const toggle = useCodeUi((s) => s.toggleCard)
   return (
-    <section className="rounded-xl border border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-900" aria-label={title}>
-      <div className="flex h-9 items-center gap-2 pl-3 pr-2.5">
+    <section className="rounded-[4px] border border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-850" aria-label={title}>
+      <div className="flex h-7 items-center gap-1.5 border-b border-ink-200/70 px-2.5 dark:border-ink-800">
         <button
           type="button"
-          className="-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5 text-xs font-medium text-ink-700 hover:bg-ink-100 hover:text-ink-900 dark:text-ink-200 dark:hover:bg-ink-800 dark:hover:text-ink-50"
+          className="-ml-1 flex items-center gap-1 rounded-[3px] px-1 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-ink-700 hover:bg-ink-100 hover:text-ink-900 dark:text-[#cccccc] dark:hover:bg-[#2a2d2e] dark:hover:text-white"
           aria-expanded={!collapsed}
           onClick={() => toggle(id)}
         >
-          {title}
           <Icon name="chevronDown" className={`size-3 text-ink-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+          {title}
         </button>
         {aside && <div className="ml-auto flex min-w-0 items-center gap-1.5">{aside}</div>}
       </div>
-      {!collapsed && <div className="space-y-1.5 px-3 pb-3">{children}</div>}
+      {!collapsed && <div className="space-y-1.5 px-2.5 py-2">{children}</div>}
     </section>
   )
 }

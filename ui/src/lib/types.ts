@@ -301,6 +301,14 @@ export type CatalogEntry = {
   last_modified: string | null
   gated: boolean
   pipeline_tag: string | null
+  trending_score?: number | null
+  base_model?: string | null
+  creator?: string | null
+  architecture?: string | null
+  parameters?: number | null
+  context_length?: number | null
+  capabilities?: string[]
+  summary?: string | null
 }
 
 export type CatalogFile = {

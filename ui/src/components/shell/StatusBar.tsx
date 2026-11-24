@@ -50,18 +50,17 @@ function offloadTitle(offload: Offload): string {
 // would decide which one wins.
 const box = 'h-full min-w-0 shrink-0 items-center gap-1.5 px-2'
 const hover =
-  'transition-colors hover:bg-ink-100 hover:text-ink-800 focus-visible:bg-ink-100 focus-visible:outline-none dark:hover:bg-ink-800 dark:hover:text-ink-100 dark:focus-visible:bg-ink-800'
+  'transition-colors hover:bg-ink-200/70 hover:text-ink-900 focus-visible:bg-ink-200/70 focus-visible:outline-none dark:hover:bg-[#2a2d2e] dark:hover:text-white dark:focus-visible:bg-[#2a2d2e]'
 const segment = `inline-flex ${box} ${hover}`
 const plain = `inline-flex ${box}`
 
 export function StatusBar() {
   return (
     <footer
-      className="flex h-6 shrink-0 items-stretch justify-between overflow-hidden border-t border-ink-200 bg-white text-[0.7rem] leading-none text-ink-500 select-none dark:border-ink-800 dark:bg-ink-900 dark:text-ink-400"
+      className="flex h-[22px] shrink-0 items-stretch justify-between overflow-hidden border-t border-ink-200 bg-ink-50 text-[11px] leading-none text-ink-600 select-none dark:border-ink-800 dark:bg-ink-950 dark:text-[#9d9d9d]"
       aria-label="Status bar"
     >
-      {/* The left side gives way first — the model's name truncates — so what is happening now,
-          on the right, is never pushed out of the window. */}
+      {/* Left: VS Code remote-host style runtime indicator + branch + loaded model + ctx/offload */}
       <div className="flex min-w-0 flex-1 items-stretch overflow-hidden">
         <RuntimeSegment />
       </div>
@@ -83,20 +82,24 @@ function RuntimeSegment() {
   const openPalette = useUi((s) => s.openPalette)
 
   const loaded = models.find((m) => m.id === runtime?.model_id) ?? null
-  // The same light as the sidebar's: it answers "is the runtime there", and the model's own name
-  // beside it answers "is anything loaded".
-  const tone = connected ? 'green' : 'red'
   const status = !connected ? 'Runtime unreachable' : runtime?.model_id ? 'Model loaded' : 'Runtime ready — no model loaded'
 
   return (
     <>
-      <button type="button" className={segment} title={`${status}${runtime ? ` · backend ${runtime.backend}` : ''}`} onClick={() => goTo('models')}>
-        <StatusDot tone={tone} />
+      <button
+        type="button"
+        className={`inline-flex h-full shrink-0 items-center gap-1.5 px-2.5 font-medium text-white transition-colors ${
+          connected ? 'bg-arc-600 hover:bg-arc-700' : 'bg-amber-600 hover:bg-amber-700'
+        }`}
+        title={`${status}${runtime ? ` · backend ${runtime.backend}` : ''}`}
+        onClick={() => goTo('models')}
+      >
+        <Icon name="bolt" className="size-3 shrink-0" />
         <span className="hidden sm:inline">{connected ? (runtime?.backend ?? 'runtime') : 'offline'}</span>
       </button>
       <ProjectSegment />
       {loadingModelId ? (
-        <span className={`inline-flex h-full min-w-0 shrink items-center gap-1.5 px-2`} title={`Loading ${loadingModelId}`}>
+        <span className="inline-flex h-full min-w-0 shrink items-center gap-1.5 px-2" title={`Loading ${loadingModelId}`}>
           <Spinner className="size-3 shrink-0 text-arc-600 dark:text-arc-400" />
           <span className="max-w-[16rem] truncate">Loading {loadingModelId}…</span>
         </span>
@@ -109,7 +112,7 @@ function RuntimeSegment() {
             onClick={() => openPalette('load model ')}
           >
             <Icon name="cube" className="size-3 shrink-0" />
-            <span className="truncate">{selectedId ?? 'モデルを追加'}</span>
+            <span className="mono truncate">{selectedId ?? 'モデルを追加'}</span>
           </button>
         )
       )}

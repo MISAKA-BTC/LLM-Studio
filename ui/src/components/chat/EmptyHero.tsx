@@ -213,23 +213,23 @@ export function EmptyHero({ conversation, children }: { conversation: Conversati
   const suggestions = code ? AGENT_SUGGESTIONS : CHAT_SUGGESTIONS
 
   return (
-    <div className="flex min-h-full flex-col items-center justify-center px-4 py-10">
-      <div className="w-full max-w-[760px]">
-        <div className="mb-6 flex flex-col items-center text-center">
-          <img src={logo} alt="" className="h-8 w-auto" />
-          <h1 className="mt-4 text-xl font-semibold tracking-tight text-ink-900 dark:text-ink-50">{code ? 'What should we build?' : 'Ask LLM Studio anything'}</h1>
+    <div className="flex min-h-full flex-col items-center justify-center px-4 py-8">
+      <div className="w-full max-w-[780px]">
+        <div className="mb-5 flex flex-col items-center text-center">
+          <div className="flex size-10 items-center justify-center rounded-[6px] border border-ink-200 bg-ink-50 p-1.5 dark:border-ink-800 dark:bg-ink-850">
+            <img src={logo} alt="" className="size-6 object-contain" />
+          </div>
+          <h1 className="mt-3 text-lg font-semibold tracking-tight text-ink-900 dark:text-white">
+            {code ? 'AI Coding Workspace' : 'LLM Studio Workbench'}
+          </h1>
 
           {code && <ProjectChip conversation={conversation} root={project} />}
 
-          <div className="mt-3 max-w-lg text-[0.8rem] leading-relaxed text-ink-500 dark:text-ink-400">
+          <div className="mt-2 max-w-lg text-xs leading-relaxed text-ink-500 dark:text-ink-400">
             {models.length === 0 ? (
               <>
                 No models are installed yet. Open <strong>Models → Model Search</strong> to find one on Hugging Face — the list shows what fits
                 this machine before you download anything.
-                {/* Otherwise this reads as "nothing was installed" to someone who just watched
-                    1.7 GiB arrive. A class artifact is a real thing on disk; it is simply not a
-                    thing this window can load, and saying which is the difference between a
-                    confusing screen and an informative one. */}
                 {installedClass && (
                   <>
                     {' '}
@@ -238,22 +238,29 @@ export function EmptyHero({ conversation, children }: { conversation: Conversati
                     which loads GGUF.
                   </>
                 )}
-                <div className="mt-3">
-                  <button type="button" className="btn-primary text-xs" onClick={() => goTo('models')}>
-                    <Icon name="download" className="size-3.5" />
-                    Get a model
+                <div className="mt-3 flex justify-center gap-2">
+                  <button
+                    type="button"
+                    className="btn-primary text-xs"
+                    onClick={() => {
+                      useUi.getState().setModelsTab('discover')
+                      goTo('models')
+                    }}
+                  >
+                    <Icon name="modelSearch" className="size-3.5" />
+                    Open Model Search
                   </button>
                 </div>
               </>
             ) : modelId ? (
               code ? (
                 <>
-                  The agent uses <span className="mono text-ink-700 dark:text-ink-300">{modelId}</span>. It works only inside
-                  the project folder, and every edit it makes can be reverted from Changes.
+                  Agent bound to <span className="mono text-ink-800 dark:text-ink-200">{modelId}</span>. Edits stay scoped to the
+                  workspace and can be inspected or reverted in Changes.
                 </>
               ) : (
                 <>
-                  <span className="mono text-ink-700 dark:text-ink-300">{modelId}</span> を選択中。そのままメッセージを送信できます。
+                  <span className="mono text-ink-800 dark:text-ink-200">{modelId}</span> を選択中。そのままメッセージを送信できます。
                 </>
               )
             ) : (
@@ -266,18 +273,23 @@ export function EmptyHero({ conversation, children }: { conversation: Conversati
 
         {children}
 
-        <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+        <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
           {suggestions.map((suggestion) => (
-            <button key={suggestion.label} type="button" className="chip-outline" onClick={() => setComposerDraft(suggestion.text)}>
-              <Icon name={suggestion.icon} className="size-3.5 text-ink-400" />
-              {suggestion.label}
+            <button
+              key={suggestion.label}
+              type="button"
+              className="flex items-center gap-2 rounded-[4px] border border-ink-200 bg-ink-50/70 px-2.5 py-2 text-left text-xs text-ink-700 transition-colors hover:border-arc-500/60 hover:bg-ink-100 dark:border-ink-800 dark:bg-ink-850 dark:text-[#cccccc] dark:hover:border-arc-500/60 dark:hover:bg-[#2a2d2e]"
+              onClick={() => setComposerDraft(suggestion.text)}
+            >
+              <Icon name={suggestion.icon} className="size-3.5 shrink-0 text-arc-600 dark:text-arc-400" />
+              <span className="truncate font-medium">{suggestion.label}</span>
             </button>
           ))}
         </div>
 
         {code && <QuickProjects current={project} />}
 
-        <div className="mt-5 flex justify-center">
+        <div className="mt-4 flex justify-center">
           <MiningLine conversation={conversation} code={code} />
         </div>
       </div>

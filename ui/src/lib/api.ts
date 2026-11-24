@@ -152,6 +152,14 @@ export const api = {
     request<CatalogRepo>(catalogRepoUrl('repo', id, revision), { signal }),
   catalogReadme: (id: string, revision?: string, signal?: AbortSignal) =>
     request<string | null>(catalogRepoUrl('readme', id, revision), { signal }),
+  catalogAvatarUrl: (owner: string) =>
+    `${API_BASE}/api/v1/catalog/avatar/${encodeURIComponent(owner)}`,
+  catalogImageUrl: (src: string, repo?: string, revision?: string | null) =>
+    `${API_BASE}/api/v1/catalog/image?${new URLSearchParams({
+      src,
+      ...(repo ? { repo } : {}),
+      ...(revision ? { revision } : {}),
+    })}`,
   downloadVariant: (repo: string, revision: string, variant: string) =>
     request<DownloadProgress>('/api/v1/catalog/download', { method: 'POST', body: JSON.stringify({ repo, revision, variant }) }),
 

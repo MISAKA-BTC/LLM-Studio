@@ -48,6 +48,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/catalog/search", get(search))
         .route("/catalog/repo/{*repo}", get(repo))
         .route("/catalog/readme/{*repo}", get(readme))
+        .route("/catalog/avatar/{owner}", get(catalog_avatar))
+        .route("/catalog/image", get(catalog_image))
         .route("/catalog/download", post(download_variant))
         .route("/downloads", get(list_downloads).post(start_download))
         .route("/downloads/stream", get(downloads_stream))
@@ -342,6 +344,56 @@ async fn readme(
     Query(query): Query<RevisionQuery>,
 ) -> Result<Json<Option<String>>> {
     Ok(Json(state.catalog().await.readme(&repo, query.revision.as_deref()).await?))
+}
+
+async fn catalog_avatar(State(state): State<Arc<AppState>>, Path(owner): Path<String>) -> Result<axum::response::Response> {
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+
+    let catalog = state.catalog().await;
+    match catalog.avatar(&owner).await? {
+        Some(image) => Ok((
+            [
+                (header::CONTENT_TYPE, image.content_type.as_str()),
+                (header::CACHE_CONTROL, "public, max-age=86400"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'"),
+            ],
+            image.bytes,
+        )
+            .into_response()),
+        None => Ok((StatusCode::NOT_FOUND, "avatar not found").into_response()),
+    }
+}
+
+#[derive(Deserialize)]
+struct CatalogImageQuery {
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    revision: Option<String>,
+    src: String,
+}
+
+async fn catalog_image(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<CatalogImageQuery>,
+) -> Result<axum::response::Response> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    let catalog = state.catalog().await;
+    let image = catalog.image(query.repo.as_deref(), query.revision.as_deref(), &query.src).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, image.content_type.as_str()),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'"),
+        ],
+        image.bytes,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
