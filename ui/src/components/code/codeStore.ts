@@ -7,6 +7,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { createPreferenceStorage } from '../../lib/preferenceStorage'
 import { pushHistory } from '../../lib/terminal'
 
 export const PANEL_DEFAULT_WIDTH = 420
@@ -65,6 +66,7 @@ export const useCodeUi = create<CodeUiState>()(
       showAgentEdits: () => set((s) => ({ agentEditsTick: s.agentEditsTick + 1 })),
     }),
     {
+      storage: createPreferenceStorage(),
       name: 'misaka-studio.code',
       partialize: (s) => ({ panelWidth: s.panelWidth, collapsed: s.collapsed, introduced: s.introduced, history: s.history }),
       version: 1,

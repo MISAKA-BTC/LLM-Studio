@@ -396,6 +396,24 @@ try {
     assert.equal(requests.filter((r) => r.pathname === '/api/v1/engines/install' && r.method !== 'GET').length, 0)
   })
 
+  await check('views remain usable when WebKit refuses preference writes', async () => {
+    const { setItem } = window.Storage.prototype
+    window.Storage.prototype.setItem = function (key, value) {
+      if (['misaka-studio.workbench', 'misaka-studio.ui', 'misaka-studio.code'].includes(key)) {
+        throw new window.DOMException('Storage is full', 'QuotaExceededError')
+      }
+      return setItem.call(this, key, value)
+    }
+    try {
+      await go('models')
+      assert.ok(findVisible('[data-model-tab="installed"]') || findVisible('[data-model-tab="discover"]'))
+      await go('chat')
+      assert.ok(findVisible('textarea[aria-label="Message"]'))
+    } finally {
+      window.Storage.prototype.setItem = setItem
+    }
+  })
+
   await check('one main surface is visible and window subscriptions survive repeated navigation', async () => {
     const sourceCount = streams.length
     for (let round = 0; round < 3; round++) {

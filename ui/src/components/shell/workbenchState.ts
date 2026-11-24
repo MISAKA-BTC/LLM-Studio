@@ -2,6 +2,7 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { createPreferenceStorage } from '../../lib/preferenceStorage'
 import { useStudio, type View } from '../../store/studio'
 import { useUi, type AppMode } from '../../store/ui'
 import { goTo, openThread } from './actions'
@@ -21,6 +22,7 @@ export const useWorkbench = create<State>()(persist((set) => ({
     return { tabs, activeKey: tab.key }
   }),
 }), {
+  storage: createPreferenceStorage(),
   name: 'misaka-studio.workbench', version: 1,
   partialize: (s) => ({ tabs: s.tabs, activeKey: s.activeKey }),
   merge: (saved, current) => {

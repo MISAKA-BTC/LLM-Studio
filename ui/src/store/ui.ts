@@ -7,6 +7,7 @@
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { createPreferenceStorage } from '../lib/preferenceStorage'
 import type { Attachment } from '../lib/types'
 
 /** What the panel on the right of the chat shows, when it shows anything. `session`, `terminal`
@@ -119,6 +120,7 @@ export const useUi = create<UiState>()(
       removeRecentWorkspace: (path) => set((s) => ({ recentWorkspaces: s.recentWorkspaces.filter((p) => p !== path) })),
     }),
     {
+      storage: createPreferenceStorage(),
       name: 'misaka-studio.ui',
       partialize: (state) => ({
         appMode: state.appMode,
