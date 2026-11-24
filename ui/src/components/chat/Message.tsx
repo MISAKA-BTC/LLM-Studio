@@ -123,10 +123,13 @@ function UserMessage({ message, editing, actions }: MessageProps) {
 function EditBox({ initial, onCancel, onSave }: { initial: string; onCancel: () => void; onSave: (content: string) => void }) {
   const [draft, setDraft] = useState(initial)
   const field = useRef<HTMLTextAreaElement>(null)
+  const focusedOnce = useRef(false)
   useEffect(() => {
+    if (focusedOnce.current) return
     const element = field.current
     if (!element) return
-    element.focus()
+    focusedOnce.current = true
+    element.focus({ preventScroll: true })
     element.setSelectionRange(element.value.length, element.value.length)
   }, [])
   useLayoutEffect(() => {

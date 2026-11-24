@@ -1,0 +1,1081 @@
+phase3-rust-fmt.log
+===================
+(empty output; command exited successfully)
+
+
+phase3-rust-clippy.log
+======================
+    Checking misaka-studio-runtime v0.1.2 (/workspace/scratch/e645501a7f4b/LLM-Studio-main/crates/misaka-studio-runtime)
+warning: unused dependency `sha2`
+  --> crates/misaka-studio-core/Cargo.toml:16:1
+   |
+16 | sha2.workspace = true
+   | ^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `sha2`
+warning: `misaka-studio-core` (manifest) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.21s
+
+
+phase3-rust-test.log
+====================
+   Compiling misaka-studio-core v0.1.2 (/workspace/scratch/e645501a7f4b/LLM-Studio-main/crates/misaka-studio-core)
+   Compiling misaka-studio-runtime v0.1.2 (/workspace/scratch/e645501a7f4b/LLM-Studio-main/crates/misaka-studio-runtime)
+warning: unused dependency `sha2`
+  --> crates/misaka-studio-core/Cargo.toml:16:1
+   |
+16 | sha2.workspace = true
+   | ^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `sha2`
+warning: `misaka-studio-core` (manifest) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.14s
+     Running unittests src/lib.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-core/52f8fee0336860a8/out/misaka_studio_core-52f8fee0336860a8)
+
+running 61 tests
+test gguf::tests::an_absurd_count_is_refused_before_allocating ... ok
+test gguf::tests::arrays_keep_their_length_but_not_their_contents ... ok
+test gguf::tests::a_non_gguf_file_is_named_as_one ... ok
+test gguf::tests::a_truncated_file_reports_where_it_ended ... ok
+test gguf::tests::kv_cache_is_sized_from_kv_heads ... ok
+test gguf::tests::version_one_is_refused_with_a_reason ... ok
+test gguf::tests::reads_shape_and_parameters_from_the_header ... ok
+test hardware::tests::the_os_keeps_its_reserve ... ok
+test image_model::tests::a_larger_image_costs_more_than_a_smaller_one ... ok
+test image_model::tests::batch_size_scales_activations_not_weights ... ok
+test image_model::tests::fit_reuses_the_shared_verdict_logic ... ok
+test model::tests::a_model_larger_than_the_machine_says_so ... ok
+test model::tests::context_is_part_of_the_bill ... ok
+test model::tests::without_a_gpu_the_verdict_is_about_ram ... ok
+test palw::tests::a_class_with_no_published_artifact_says_so_instead_of_offering_a_download ... ok
+test palw::tests::a_gguf_and_a_half_downloaded_artifact_are_not_artifacts ... ok
+test palw::tests::a_header_this_build_does_not_read_yields_nothing ... ok
+test palw::tests::a_pinned_conversion_of_another_size_is_a_mismatch ... ok
+test palw::tests::a_present_artifact_is_reported_with_its_path_and_not_called_verified ... ok
+test model::tests::the_recommended_context_shrinks_to_what_fits ... ok
+test palw::tests::a_wrong_sized_artifact_is_a_mismatch_not_a_presence ... ok
+test palw::tests::an_oversized_class_carries_a_memory_note ... ok
+test palw::tests::every_class_names_its_registered_context ... ok
+test palw::tests::an_extension_is_read_from_the_last_dot_of_the_filename ... ok
+test palw::tests::a_missing_artifact_offers_a_download_only_where_one_is_published ... ok
+test palw::tests::every_registered_artifact_is_recognised_by_its_own_filename ... ok
+test palw::tests::the_2m_class_is_not_the_512_artifact ... ok
+test palw::tests::the_8k_row_is_a_verified_download_and_a_reproducible_conversion ... ok
+test palw::tests::the_a16_tokenizer_is_pinned_and_named_after_its_artifact ... ok
+test palw::tests::each_network_reads_its_own_table ... ok
+test palw::tests::the_default_class_is_a_model_class_with_a_pinned_file ... ok
+test palw::tests::the_memory_note_counts_the_replay_not_just_the_file ... ok
+test palw::tests::the_floor_is_always_ready_even_on_an_empty_machine ... ok
+test palw::tests::the_published_2b_is_a_pinned_palwart3_and_no_class_of_this_network ... ok
+test palw::tests::the_testnet12_snapshot_is_the_genesis_card ... ok
+test palw::tests::the_real_a16_artifact_header_reads_as_qwen25_at_512_positions ... ok
+test provenance::tests::an_absent_seed_differs_from_seed_zero ... ok
+test provenance::tests::a_raw_prompt_is_a_different_job_from_the_same_text_as_a_message ... ok
+test provenance::tests::runtime_identity_and_class_match_the_consensus_pins ... ok
+test provenance::tests::the_canonical_encoding_is_stable ... ok
+test provenance::tests::every_model_field_is_load_bearing ... ok
+test provenance::tests::model_identity_matches_the_consensus_pins ... ok
+test provenance::tests::two_conversations_cannot_share_a_commitment ... ok
+test quant::tests::a_tag_inside_a_word_is_not_a_match ... ok
+test quant::tests::filename_matching_prefers_the_longest_tag ... ok
+test provenance::tests::a_record_verifies_against_its_own_bytes ... ok
+test quant::tests::the_header_file_type_wins ... ok
+test quant::tests::weight_bytes_track_the_effective_rate ... ok
+test provenance::tests::timing_does_not_change_the_inference_hash ... ok
+test provenance::tests::digests_round_trip_through_json ... ok
+test provenance::tests::sampling_settings_are_committed ... ok
+test palw::tests::the_testnet11_snapshot_is_internally_consistent ... ok
+test settings::tests::a_missing_file_is_the_defaults_and_a_broken_one_is_an_error ... ok
+test quant::tests::removed_file_types_are_unknown_rather_than_misread ... ok
+test settings::tests::a_public_bind_without_a_key_is_flagged ... ok
+test settings::tests::saving_leaves_no_temp_file_behind ... ok
+test settings::tests::unknown_and_missing_fields_both_load ... ok
+test hardware::tests::probing_always_yields_a_device ... ok
+test settings::tests::settings_round_trip_through_a_file ... ok
+test settings::network_migration_tests::a_settings_file_written_for_testnet_11_loads_as_testnet_12 ... ok
+test hardware::tests::sampling_twice_is_enough_for_a_cpu_reading ... ok
+
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/290600d57dda5b5f/out/misaka_studio_runtime-290600d57dda5b5f)
+
+running 294 tests
+test api::guard::tests::a_network_bind_refuses_the_whole_workspace_api ... ok
+test api::guard::tests::a_peer_off_this_machine_is_refused_by_the_workspace_api ... ok
+test api::guard::tests::a_network_bind_serves_its_own_window_and_refuses_other_pages ... ok
+test api::guard::tests::the_studios_own_callers_are_allowed ... ok
+test api::guard::tests::a_listed_origin_reaches_the_studio_api_and_never_the_workspace ... ok
+test api::guard::tests::a_foreign_page_or_a_rebound_host_is_refused ... ok
+test api::model_market::tests::a_refusal_is_unwrapped_to_its_sentence ... ok
+test api::model_market::tests::a_cli_answer_is_read_in_either_shape ... ok
+test api::model_market::tests::a_short_balance_is_named_in_msk_not_hidden ... ok
+test api::model_market::tests::an_amount_is_taken_exactly_or_refused ... ok
+test api::openai::tests::an_openai_shaped_request_parses ... ok
+test api::model_market::tests::an_unreachable_chain_is_not_an_unseeded_market ... ok
+test api::model_market::tests::the_floor_is_the_consensus_constant ... ok
+test api::openai::tests::completion_ids_carry_the_expected_prefix ... ok
+test api::openai::tests::request_values_override_defaults_and_absent_ones_do_not ... ok
+test api::openai::tests::stop_parses_as_either_a_string_or_a_list ... ok
+test api::openai::tests::the_misaka_extension_is_optional_and_read_when_sent ... ok
+test api::tests::constant_time_comparison_still_compares ... ok
+test api::network::tests::no_artifact_means_no_flag ... ok
+test api::network::tests::a_short_file_is_not_the_default_artifact ... ok
+test api::prompt_mining::tests::an_unknown_id_is_unknown_while_any_catalog_id_is_a_prefix ... ok
+test api::prompt_mining::tests::a_complete_catalog_id_is_recognised ... ok
+test api::web::tests::only_a_positive_tor_exit_verification_allows_research ... ok
+test api::web::tests::finds_algorithm_code_in_a_long_minified_script ... ok
+test api::ui::tests::an_unknown_route_gets_the_app_and_a_missing_asset_gets_a_404 ... ok
+test api::ui::tests::the_binary_carries_the_ui_when_one_was_built ... ok
+test api::web::tests::only_local_socks_endpoints_are_allowed ... ok
+test api::network::tests::a_full_sized_artifact_is_offered_by_path ... ok
+test api::web::tests::unsafe_urls_and_private_addresses_are_rejected_before_any_connection ... ok
+test api::web::tests::tor_failure_does_not_fall_back_to_direct_or_local_dns ... ok
+test api::workspace::tests::model_shaped_numbers_and_flags_parse ... ok
+test api::workspace::tests::dropping_a_queued_read_never_starts_its_blocking_work ... ok
+test api::ui::tests::index_is_revalidated_and_hashed_assets_are_held ... ok
+test api::web::tests::redirects_cannot_reach_loopback_even_through_tor ... ok
+test backend::context_fit_tests::either_refusal_names_the_context ... ok
+test backend::context_fit_tests::either_refusal_names_the_prompt_length ... ok
+test backend::context_fit_tests::a_continuation_for_a_small_window_carries_the_question_and_the_tail ... ok
+test api::web::tests::tor_resolves_remotely_and_returns_text_via_the_proxy ... ok
+test backend::devices::tests::a_cpu_only_build_is_an_empty_list_and_an_old_engine_is_no_list ... ok
+test backend::devices::tests::a_log_without_the_line_says_nothing_and_the_device_list_fills_in ... ok
+test backend::devices::tests::a_metal_load_is_read_from_the_buffers ... ok
+test backend::devices::tests::a_real_device_listing_parses ... ok
+test api::web::tests::pages_are_text_only_bounded_and_searches_keep_actual_source_links ... ok
+test backend::context_fit_tests::the_answers_half_is_reserved_out_of_the_window_not_out_of_the_ask ... ok
+test backend::devices::tests::cuda_host_buffers_count_as_cpu ... ok
+test backend::devices::tests::an_offloaded_line_with_no_accelerator_buffer_is_a_cpu_run ... ok
+test backend::devices::tests::other_backends_are_named_by_their_prefix ... ok
+test backend::context_fit_tests::a_continuation_with_no_room_says_so ... ok
+test api::management::strata_tests::oversized_prepared_moe_is_selectable_as_ssd_streaming_without_claiming_ram_fit ... ok
+test backend::devices::tests::the_last_load_pass_wins ... ok
+test backend::gateway::tests::a_refusal_names_the_ceiling_that_would_have_fit ... ok
+test backend::devices::tests::a_missing_program_is_reported_and_not_cached ... ok
+test backend::gateway::tests::an_ask_too_big_for_the_class_gets_the_room_and_not_a_fraction_of_it ... ok
+test backend::gateway::tests::the_claim_id_is_read_out_of_the_gateways_last_event ... ok
+test backend::gateway::tests::the_gateways_commit_verdict_is_read_beside_the_claim_id ... ok
+test backend::llamacpp::tests::a_missing_engine_is_named_not_pathed ... ok
+test backend::diffusion::tests::a_missing_python_reports_unavailable_with_a_remedy ... ok
+test backend::gateway::tests::the_prompt_estimate_does_not_undercount_japanese ... ok
+test backend::llamacpp::tests::a_model_without_a_chat_template_is_given_one ... ok
+test api::workspace::tests::dropped_read_future_cancels_running_work_and_keeps_its_permit_until_it_stops ... ok
+test backend::llamacpp::tests::absent_options_are_absent_flags ... ok
+test backend::llamacpp::tests::the_command_line_carries_the_load_request ... ok
+test backend::llamacpp::tests::a_configured_path_wins ... ok
+test backend::llamacpp::tests::the_engine_only_ever_binds_loopback ... ok
+test backend::llamacpp::tests::mlock_and_no_mmap_are_passed_when_asked_for ... ok
+test backend::llamacpp::tests::finder_finds_homebrew_without_overriding_explicit_or_path_engines ... ok
+test backend::misaka::tests::the_class_named_tokenizer_is_found_beside_its_artifact ... ok
+test backend::misaka::tests::its_class_is_its_own ... ok
+test backend::misaka::tests::the_command_line_is_the_artifact_a_tokenizer_and_a_port ... ok
+test backend::mlx::tests::the_command_line_points_at_the_model_directory ... ok
+test backend::misaka::tests::the_tokenizer_is_configured_then_beside_the_artifact_then_named ... ok
+test backend::mock::tests::a_stream_dropped_before_its_task_runs_never_starts_producing ... ok
+test backend::mlx::tests::off_apple_silicon_it_says_so_before_anything_is_downloaded ... ok
+test backend::mock::tests::load_and_unload_are_visible ... ok
+test backend::mock::tests::dropping_a_stream_cancels_a_producer_that_is_waiting_without_sending ... ok
+test backend::mock::tests::a_slow_consumer_keeps_backpressure_and_disconnecting_releases_a_full_queue ... ok
+test backend::mock::tests::max_tokens_stops_it_and_says_why ... ok
+test backend::mock::tests::the_deltas_reassemble_into_the_whole_answer ... ok
+test backend::mock::tests::the_same_prompt_gives_the_same_bytes ... ok
+test backend::misaka::tests::a_missing_server_is_named_and_never_substituted ... ok
+test backend::mock::tests::think_asks_the_mock_to_reason_first ... ok
+test backend::openai_child::tests::a_finish_reason_also_proves_completion_without_done ... ok
+test backend::openai_child::tests::a_partial_answer_is_not_a_completed_stream ... ok
+test backend::openai_child::tests::a_complete_answer_survives_a_truncated_http_chunk_terminator ... ok
+test backend::openai_child::tests::a_disconnect_before_tokens_is_retried_once ... ok
+test backend::openai_child::tests::a_version_banner_yields_a_commit_and_a_build_number ... ok
+test backend::openai_child::tests::completions_read_the_text_field_not_the_delta ... ok
+test backend::openai_child::tests::deltas_survive_being_split_across_chunks ... ok
+test backend::openai_child::tests::done_is_a_terminal_sse_frame_even_when_more_bytes_follow ... ok
+test backend::openai_child::tests::an_unloaded_engine_is_not_reported_as_still_running ... ok
+test backend::gateway::tests::claim_receipts_are_read_once_in_the_same_pass_as_fragmented_deltas ... ok
+test backend::openai_child::tests::reasoning_deltas_are_their_own_events_in_the_order_they_came ... ok
+test backend::openai_child::tests::a_failed_version_probe_is_retried_after_its_short_ttl_even_without_a_file_change ... ok
+test backend::openai_child::tests::the_commit_is_a_commit_and_not_a_sentence ... ok
+test backend::openai_child::tests::the_error_chain_carries_the_reason_once ... ok
+test backend::openai_child::tests::the_reasoning_alias_is_read_once ... ok
+test backend::openai_child::tests::the_request_body_carries_every_sampling_field ... ok
+test backend::openai_child::tests::thinking_leaves_room_for_an_answer_only_on_llamacpp_chat ... ok
+test backend::openai_child::tests::unparseable_lines_are_skipped ... ok
+test backend::openai_child::tests::usage_falls_back_to_an_estimate_when_the_engine_is_silent ... ok
+test backend::openai_child::tests::usage_is_taken_from_the_engine_when_it_sends_it ... ok
+test backend::openai_child::tests::installing_replacing_and_removing_the_binary_invalidate_version_status ... ok
+test backend::strata::tests::registers_only_native_file_and_keeps_routing_on_missing_companion ... ok
+test backend::openai_child::tests::version_status_is_singleflight_and_short_lived_but_provenance_always_probes_fresh ... ok
+test backend::openai_child::tests::a_long_unicode_delta_survives_single_byte_fragments ... ok
+test backend::tests::the_fallback_prompt_ends_with_the_assistant_turn ... ok
+test backend::tests::token_estimates_are_never_zero_for_non_empty_text ... ok
+test backend::strata::tests::rejects_dense_profile_and_bounds_cache_without_requiring_all_weights_in_ram ... ok
+test catalog::tests::a_missing_repo_explains_itself ... ok
+test catalog::tests::a_repo_listing_gives_sizes_digests_and_quantizations ... ok
+test catalog::tests::cancelled_initializers_do_not_leave_other_callers_waiting_forever ... ok
+test backend::openai_child::tests::cancelling_a_version_status_request_kills_the_probe_and_releases_singleflight ... ok
+test catalog::tests::download_urls_pin_the_revision ... ok
+test catalog::tests::search_reads_both_id_shapes_and_both_gated_shapes ... ok
+test backend::openai_child::tests::many_batched_frames_and_an_unfinished_tail_preserve_every_event ... ok
+test catalog::tests::successful_entries_expire_and_least_recently_used_entries_are_bounded ... ok
+test catalog::tests::concurrent_requests_share_a_result_and_failures_do_not_become_a_negative_cache ... ok
+test context::required_chat_tests::oversized_tool_results_keep_the_question_and_one_complete_envelope ... ok
+test context::summarizer::tests::a_summary_is_cleaned_to_bullets ... ok
+test context::summarizer::tests::a_growing_history_shares_its_prefix_keys ... ok
+test context::summarizer::tests::the_fold_prompt_carries_the_previous_summary_and_the_new_turns ... ok
+test context::tests::a_continuation_keeps_its_question_and_reply_and_skips_history ... ok
+test context::tests::a_conversation_that_fits_is_sent_whole ... ok
+test context::summarizer::tests::the_cache_forgets_its_oldest_entries_past_its_cap ... ok
+test context::tests::a_long_partial_reply_does_not_count_against_the_question ... ok
+test context::tests::a_count_scale_leaves_more_margin ... ok
+test context::tests::a_supplied_summary_is_used_and_trimmed_to_the_room ... ok
+test context::tests::a_question_larger_than_the_window_is_refused_only_on_an_exact_count ... ok
+test context::tests::an_extract_prefers_covering_every_turn ... ok
+test context::tests::an_extract_fits_its_budget_or_is_empty ... ok
+test context::tests::at_512_the_older_turns_become_a_memory_that_keeps_the_result ... ok
+test context::tests::pins_come_before_history_and_the_ones_that_do_not_fit_are_counted ... ok
+test context::tests::the_key_sentence_is_the_one_that_states_a_result ... ok
+test context::tests::the_question_gist_keeps_its_formula_or_its_ask ... ok
+test context::tokens::tests::a_conversation_counts_its_template ... ok
+test context::tokens::tests::rare_kanji_are_the_known_under_count ... ok
+test context::tokens::tests::the_estimate_is_an_upper_bound_on_every_measured_sample ... ok
+test context::tokens::tests::the_tokenizer_file_counts_what_llama_cpp_counts ... ok
+test context::work::tests::an_abandoned_running_job_keeps_its_slot_until_the_cpu_work_finishes ... ok
+test context::work::tests::cancelling_a_queued_request_never_runs_its_context_work ... ok
+test context::work::tests::context_work_does_not_block_the_single_thread_http_executor ... ok
+test context::work::tests::dropping_a_request_also_aborts_a_job_still_queued_in_tokios_blocking_pool ... ok
+test context::tests::compacting_tool_steps_keeps_the_real_user_query_for_qwen_templates ... ok
+test catalog::tests::actual_search_http_is_reused_without_crossing_limits_or_credentials ... ok
+test catalog::tests::simultaneous_repo_http_calls_share_two_requests_and_pin_the_tree_revision ... ok
+test download::tests::downloading_over_an_existing_model_is_refused ... ok
+test download::tests::a_digest_mismatch_discards_the_file ... ok
+test download::tests::progress_arithmetic_does_not_produce_infinities ... ok
+test engines::tests::a_build_tag_is_b_and_digits ... ok
+test engines::tests::a_digest_is_read_from_the_api_shape ... ok
+test download::tests::a_download_lands_verified_with_its_provenance_sidecar ... ok
+test engines::tests::a_tarball_in_upstreams_layout_yields_an_executable_binary ... ok
+test engines::tests::an_unknown_archive_type_and_an_archive_without_the_binary_are_named_errors ... ok
+test engines::tests::asset_names_match_what_upstream_publishes ... ok
+test engines::tests::every_shipping_platform_has_builds_and_the_gpu_ones_come_first ... ok
+test engines::tests::installed_engines_are_read_from_their_manifests_newest_first ... ok
+test engines::tests::a_zip_unpacks_flat_companions_land_beside_the_binary_and_traversal_is_refused ... ok
+test engines::tests::the_recommendation_follows_the_card_and_its_driver ... ok
+test error::tests::every_error_says_what_to_do ... ok
+test error::tests::statuses_match_what_a_client_should_do ... ok
+test fp_stack::tests::the_identity_is_read_for_the_default_class_through_the_public_node ... ok
+test fp_stack::tests::the_gateway_reads_the_public_node_publishes_to_the_public_provider_and_runs_the_8k_worker ... ok
+test fp_stack::tests::the_key_and_the_artifact_are_required_with_their_remedy ... ok
+test fp_stack::tests::the_rail_watches_the_outbox_signs_with_the_bond_key_and_names_the_users_consent ... ok
+test fp_stack::tests::the_seed_is_never_inside_the_directories_the_gateway_scans_for_secrets ... ok
+test metrics::tests::a_cancelled_caller_does_not_start_a_second_probe_over_the_first ... ok
+test metrics::tests::a_sample_carries_both_halves ... ok
+test metrics::tests::a_slow_hardware_probe_does_not_block_the_async_executor ... ok
+test download::tests::an_interrupted_download_resumes_from_the_part_file ... ok
+test metrics::tests::concurrent_snapshot_requests_share_one_hardware_probe_but_read_live_generation_stats ... ok
+test download::tests::installing_a_class_artifact_again_replaces_the_file ... ok
+test metrics::tests::counters_survive_more_finishes_than_starts ... ok
+test mining_queue::tests::a_job_survives_a_restart_and_a_running_one_is_requeued ... ok
+test mining_queue::tests::only_finished_jobs_are_trimmed_and_the_live_ones_stay ... ok
+test metrics::tests::idle_sampler_waits_for_a_subscription ... ok
+test mining_queue::tests::retry_reopens_a_refused_job_and_remove_leaves_a_running_one ... ok
+test node::tests::the_cli_and_the_gateway_default_to_the_first_public_node ... ok
+test node::tests::the_stand_down_follows_the_newest_block_s_lane ... ok
+test metrics::tests::subscribers_receive_ticks ... ok
+test mining_queue::tests::an_answer_the_gateway_did_not_commit_is_refused_with_the_gateways_reason ... ok
+test mining_queue::tests::the_same_prompt_still_waiting_is_the_same_job ... ok
+test records::tests::a_record_without_transcripts_contains_no_prompt_text ... ok
+test records::tests::recording_can_be_switched_off_entirely ... ok
+test remote_miner::live::live_preflight_and_checkpoint_read_the_public_testnet_12_nodes ... ignored, reaches the public testnet-12 nodes
+test remote_miner::tests::every_missing_value_is_refused_with_its_remedy ... ok
+test remote_miner::tests::the_8k_row_passes_its_artifact_to_the_executor_and_refuses_without_one ... ok
+test remote_miner::tests::the_event_lines_fold_into_facts ... ok
+test remote_miner::tests::the_floor_command_uses_both_public_nodes_the_official_executor_and_the_users_checkpoint ... ok
+test records::tests::records_append_and_survive_a_reopen ... ok
+test remote_miner::tests::without_consent_the_command_carries_no_unverified_flag ... ok
+test repetition::tests::a_repeated_paragraph_is_a_loop ... ok
+test repetition::tests::a_repeated_rule_or_a_zero_filled_run_is_formatting_not_a_loop ... ok
+test repetition::tests::a_short_period_needs_three_full_repeats_not_two ... ok
+test repetition::tests::a_short_repeated_clause_is_caught_before_the_tail_test_would_fire ... ok
+test repetition::tests::ordinary_prose_does_not_loop ... ok
+test repetition::tests::repetitive_tool_arguments_are_not_a_loop ... ok
+test repetition::tests::text_shorter_than_one_short_period_times_three_never_loops ... ok
+test state::tests::a_cpu_only_engine_gets_no_layers_however_good_the_card ... ok
+test state::tests::a_model_that_does_not_fit_is_split ... ok
+test state::tests::a_model_that_fits_is_fully_offloaded ... ok
+test state::tests::an_engine_that_sees_a_gpu_the_probe_missed_offloads_to_it ... ok
+test state::tests::context_length_takes_layers_off_the_gpu ... ok
+test state::tests::each_engine_refuses_the_other_kind_of_file_and_says_where_to_go ... ok
+test state::tests::explicit_settings_win_over_the_estimate ... ok
+test records::tests::a_corrupt_line_does_not_hide_the_good_ones ... ok
+test state::tests::the_engines_own_memory_figure_sets_the_budget ... ok
+test state::tests::the_note_names_the_cause_and_stays_quiet_when_nothing_is_wrong ... ok
+test state::tests::without_a_gpu_nothing_is_offloaded ... ok
+test store::tests::a_burst_of_refresh_requests_shares_one_filesystem_pass ... ok
+test store::tests::a_diffusers_directory_is_one_image_model_kept_apart_from_chat_models ... ok
+test state::tests::strata_profile_routes_its_native_model_and_leaves_dense_gguf_on_llamacpp ... ok
+test store::tests::a_same_size_edit_and_a_corrupt_replacement_do_not_reuse_old_headers ... ok
+test store::tests::an_mlx_directory_is_one_model ... ok
+test store::tests::an_old_scan_cannot_publish_after_the_watched_roots_change ... ok
+test store::tests::continuation_shards_are_not_separate_models ... ok
+test records::tests::trimming_keeps_the_newest_and_leaves_a_readable_file ... ok
+test store::tests::deleting_an_unknown_model_is_a_not_found_not_a_panic ... ok
+test store::tests::changes_during_an_active_scan_get_one_trailing_pass ... ok
+test store::tests::directory_model_weights_are_rescanned_even_when_the_parent_directory_does_not_change ... ok
+test store::tests::deleting_removes_the_model_and_its_sidecar ... ok
+test store::tests::mlx_and_diffusers_directories_coexist_without_crossing_lists ... ok
+test store::tests::scanning_finds_models_and_reads_their_quantization ... ok
+test workspace::git::tests::a_conflict_outranks_whatever_its_letters_say ... ok
+test workspace::git::tests::a_cut_patch_ends_at_a_whole_line ... ok
+test workspace::git::tests::a_rename_the_diff_did_not_see_counts_both_sides ... ok
+test store::tests::hashing_is_cached_in_the_sidecar_and_invalidated_by_a_size_change ... ok
+test workspace::git::tests::numstat_lines_binaries_and_renames ... ok
+test workspace::git::tests::paths_are_made_relative_to_the_root ... ok
+test workspace::git::tests::porcelain_v2_headers_before_the_first_commit_and_when_detached ... ok
+test workspace::git::tests::porcelain_v2_records_of_every_kind ... ok
+test workspace::performance_tests::a_cached_read_does_not_bypass_the_symlink_boundary_check ... ok
+test workspace::git::tests::new_files_are_counted_like_git_counts_them ... ok
+test workspace::performance_tests::cancelled_queries_stop_even_while_waiting_for_an_existing_index_build ... ok
+test workspace::performance_tests::cancelled_read_only_operations_touch_no_file_content ... ok
+test workspace::performance_tests::completed_and_failed_commands_invalidate_interactive_indexes ... ok
+test workspace::performance_tests::background_git_status_skips_numstat_and_untracked_content_but_detailed_status_keeps_counts ... ok
+test workspace::performance_tests::concurrent_interactive_queries_do_one_walk_per_root ... ok
+test workspace::performance_tests::file_replacement_and_own_edits_invalidate_line_offsets ... ok
+test workspace::performance_tests::line_checkpoints_remain_bounded_for_very_many_short_lines ... ok
+test workspace::performance_tests::interactive_queries_share_an_index_but_fresh_calls_and_mutations_invalidate_it ... ok
+test workspace::performance_tests::tree_only_stats_files_in_the_returned_window ... ok
+test workspace::tests::a_binary_file_is_never_overwritten ... ok
+test workspace::tests::a_capture_keeps_both_ends ... ok
+test workspace::tests::a_character_split_between_reads_arrives_whole ... ok
+test workspace::tests::a_cut_falls_between_lines ... ok
+test workspace::tests::a_dangling_symlink_cannot_be_written_through ... ok
+test workspace::tests::a_long_line_is_cut_around_its_match ... ok
+test workspace::tests::a_mid_line_needle_keeps_its_meaningful_trailing_space ... ok
+test workspace::tests::a_root_must_be_an_existing_absolute_directory ... ok
+test backend::openai_child::tests::an_engine_that_exited_is_no_longer_loaded ... ok
+test workspace::tests::a_symlink_out_of_the_root_is_refused_however_innocent_the_name ... ok
+test backend::openai_child::tests::a_hung_version_probe_times_out_and_its_child_is_killed ... ok
+test workspace::tests::a_tree_over_its_limit_keeps_the_shallow_entries ... ok
+test workspace::tests::a_worktrees_git_file_is_followed ... ok
+test workspace::tests::absolute_paths_are_accepted_only_inside_the_root ... ok
+test workspace::tests::an_empty_command_is_refused_before_anything_starts ... ok
+test workspace::tests::an_empty_query_lists_the_newest_files_first ... ok
+test workspace::tests::browse_lists_subdirectories_only_sorted_and_without_dot_dirs ... ok
+test workspace::tests::dot_dot_cannot_climb_out ... ok
+test workspace::tests::edit_errors_are_instructions ... ok
+test workspace::tests::edit_forgives_line_endings ... ok
+test workspace::tests::edit_forgives_trailing_whitespace_but_not_indentation ... ok
+test workspace::tests::edit_refuses_what_it_cannot_rewrite ... ok
+test workspace::tests::edit_replaces_one_exact_match ... ok
+test workspace::performance_tests::repeated_ranges_seek_to_sparse_offsets_without_rescanning_to_eof ... ok
+test workspace::tests::exec_has_no_terminal_and_no_stdin ... ok
+test workspace::tests::globs_split_outside_braces ... ok
+test workspace::tests::exec_runs_in_the_root_with_the_agent_environment ... ok
+test workspace::tests::nothing_inside_dot_git_changes ... ok
+test workspace::tests::open_reads_the_branch_without_git ... ok
+test workspace::tests::read_reports_binary_and_empty_files ... ok
+test workspace::tests::read_returns_the_requested_lines_raw ... ok
+test workspace::tests::read_truncates_at_a_line_boundary ... ok
+test workspace::tests::relative_paths_resolve_inside_the_root ... ok
+test workspace::tests::remove_deletes_files_only ... ok
+test workspace::tests::removing_a_symlink_removes_the_link_not_its_target ... ok
+test workspace::tests::huge_output_is_cut_in_the_middle ... ok
+test workspace::tests::search_stops_at_max_results_and_says_so ... ok
+test store::tests::thousand_model_rescans_read_only_changed_headers_and_track_sidecars_and_deletions ... ok
+test workspace::tests::subsequence_scoring_rewards_boundaries_and_runs ... ok
+test workspace::tests::search_finds_lines_like_ripgrep ... ok
+test workspace::tests::the_output_budget_is_shared_and_noted_once ... ok
+test workspace::tests::the_tree_honours_gitignore_keeps_dotfiles_and_never_lists_dot_git ... ok
+test workspace::tests::the_fuzzy_finder_prefers_names_word_starts_and_short_paths ... ok
+test workspace::tests::without_a_gitignore_the_heavy_directories_are_skipped ... ok
+test backend::strata::tests::supervises_real_http_child_applies_paging_settings_and_stops_it ... ok
+test workspace::tests::write_and_edit_keep_the_files_permissions ... ok
+test workspace::tests::write_creates_folders_and_reports_what_was_there ... ok
+test workspace::tests::streamed_output_stops_at_the_cap_and_the_command_still_finishes ... ok
+test workspace::tests::a_streamed_command_reports_both_pipes_then_its_exit ... ok
+test backend::openai_child::tests::interrupted_partial_answers_are_not_replayed_or_marked_done ... ok
+test backend::openai_child::tests::repeated_empty_disconnects_stop_after_one_retry ... ok
+test state::tests::startup_deadline_covers_headers_and_json_and_releases_the_model_load_queue ... ok
+test workspace::tests::a_timeout_kills_the_whole_group ... ok
+
+test result: ok. 293 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.25s
+
+     Running unittests src/bin/misaka-studiod.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/20f4bccc3deb8cd5/out/misaka_studiod-20f4bccc3deb8cd5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_guard.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/cb8b941d4950e08f/out/api_guard-cb8b941d4950e08f)
+
+running 4 tests
+test the_openai_surface_stays_open_to_any_origin ... ok
+test a_wildcard_listing_restores_any_origin_for_the_studio_api_only ... ok
+test a_listed_origin_reaches_the_studio_api_but_not_the_workspace ... ok
+test the_studio_api_answers_its_own_window_and_refuses_foreign_pages ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/context_manager_512.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/c2d5b69093410aa6/out/context_manager_512-c2d5b69093410aa6)
+
+running 3 tests
+test with_the_class_tokenizer_the_plan_is_counted_exactly ... ok
+test the_plan_can_be_previewed_without_sending_anything ... ok
+test the_third_question_reaches_the_lane_with_the_first_two_remembered ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/continue_a_cut_off_reply.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/8af43c82b8bd018b/out/continue_a_cut_off_reply-8af43c82b8bd018b)
+
+running 4 tests
+test with_the_real_tokenizer_the_whole_question_and_a_tail_fit ... ok
+test a_continuation_with_no_room_is_refused_with_a_sentence ... ok
+test the_lane_is_sent_the_question_and_the_end_of_the_answer_within_its_window ... ok
+test http_context_refusal_replans_before_streaming ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/engine_install.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/af5d5c3b99f610b2/out/engine_install-af5d5c3b99f610b2)
+
+running 2 tests
+test a_missing_flavour_or_asset_is_a_named_refusal ... ok
+test an_engine_is_resolved_downloaded_verified_unpacked_probed_and_wired_in ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/gateway_follows_its_url.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/ca9a25a50db3e13f/out/gateway_follows_its_url-ca9a25a50db3e13f)
+
+running 2 tests
+test unrelated_settings_leave_the_engine_alone ... ok
+test a_moved_gateway_replaces_the_gateway_engine ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/inference_cancellation.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/da9411f41a97f079/out/inference_cancellation-da9411f41a97f079)
+
+running 4 tests
+test an_http_disconnect_before_response_headers_cancels_first_token_wait ... ok
+test dropping_generation_before_the_first_token_cancels_upstream_and_releases_metrics ... ok
+test dropping_a_returned_stream_cancels_an_engine_silent_between_tokens ... ok
+test an_http_disconnect_after_one_event_reaches_the_quiet_engine ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/llamacpp_e2e.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/aa2813420dcf53fd/out/llamacpp_e2e-aa2813420dcf53fd)
+
+running 2 tests
+test a_real_engine_loads_streams_and_identifies_itself ... ok
+test a_missing_model_fails_fast_with_the_engines_own_words ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/one_load_at_a_time.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/517d48df428c2600/out/one_load_at_a_time-517d48df428c2600)
+
+running 1 test
+test two_loads_of_one_model_start_it_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/palw_artifact_gate.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/29a87926159fb235/out/palw_artifact_gate-29a87926159fb235)
+
+running 3 tests
+test a_q36_artifact_is_rejected_before_starting_base0_serve ... ok
+test an_artifact_is_listed_as_a_model_but_refused_by_an_engine_that_cannot_read_it ... ok
+test the_backend_that_can_read_an_artifact_is_not_gated ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/reasoning_passthrough.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/f34d4de24c3e2f3d/out/reasoning_passthrough-f34d4de24c3e2f3d)
+
+running 2 tests
+test reasoning_streams_as_reasoning_content_and_stays_out_of_the_record ... ok
+test thinking_false_reaches_the_engine ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.45s
+
+     Running tests/stop_a_looping_reply.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/e88ba7835bbb878b/out/stop_a_looping_reply-e88ba7835bbb878b)
+
+running 2 tests
+test an_ordinary_reply_streams_to_the_end ... ok
+test a_repeating_stream_is_cut_after_three_copies_not_run_to_max_tokens ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/web_api.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/41e08616b2ecb93d/out/web_api-41e08616b2ecb93d)
+
+running 1 test
+test web_is_opt_in_mining_gated_and_never_available_to_foreign_origins ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/workspace_api.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/37ad7be86f3c2940/out/workspace_api-37ad7be86f3c2940)
+
+running 2 tests
+test the_guard_lets_the_studio_in_and_keeps_foreign_pages_out ... ok
+test every_route_answers_in_the_shape_the_ui_expects ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/workspace_git_and_terminal.rs (/workspace/scratch/e645501a7f4b/.tools/cargo-target/debug/build/misaka-studio-runtime/1499a16066738e3e/out/workspace_git_and_terminal-1499a16066738e3e)
+
+running 10 tests
+test a_foreign_page_reaches_none_of_them ... ok
+test dropping_the_stream_kills_what_the_command_started ... ok
+test git_summary_is_explicit_and_default_status_still_includes_counts ... ok
+test the_pipes_stay_apart_and_the_exit_code_comes_last ... ok
+test a_plain_folder_is_not_git_and_has_no_diff ... ok
+test git_status_lists_every_kind_of_change_with_line_counts ... ok
+test before_the_first_commit_and_with_an_upstream ... ok
+test git_diff_of_the_root_a_file_a_rename_and_a_new_file ... ok
+test output_arrives_as_it_is_printed ... ok
+test a_streamed_command_times_out ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s
+
+   Doc-tests misaka_studio_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests misaka_studio_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+
+phase3-rust-release.log
+=======================
+   Compiling blake2b_simd v1.0.5
+   Compiling sharded-slab v0.1.7
+   Compiling tokio-tungstenite v0.29.0
+   Compiling html5ever v0.35.0
+   Compiling monostate v0.1.18
+   Compiling tungstenite v0.23.0
+   Compiling tower-http v0.6.11
+   Compiling rust-embed-impl v8.12.0
+   Compiling derive_builder v0.20.2
+   Compiling fancy-regex v0.17.0
+   Compiling axum-core v0.5.6
+   Compiling hyper-rustls v0.27.9
+   Compiling xattr v1.6.1
+   Compiling sysinfo v0.31.4
+   Compiling webpki-roots v0.26.11
+   Compiling sha2 v0.10.9
+   Compiling regex v1.13.1
+   Compiling matchers v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling dary_heap v0.3.9
+   Compiling axum-macros v0.5.1
+   Compiling serde_path_to_error v0.1.20
+   Compiling filetime v0.2.29
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling thread_local v1.1.10
+   Compiling matchit v0.8.4
+   Compiling typed-path v0.12.3
+   Compiling daachorse v3.0.3
+   Compiling ego-tree v0.10.0
+   Compiling unicode_categories v0.1.1
+   Compiling misaka-studio-runtime v0.1.2 (/workspace/scratch/e645501a7f4b/LLM-Studio-main/crates/misaka-studio-runtime)
+   Compiling fastrand v2.5.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling hex v0.4.3
+   Compiling misaka-studio-core v0.1.2 (/workspace/scratch/e645501a7f4b/LLM-Studio-main/crates/misaka-studio-core)
+   Compiling tracing-subscriber v0.3.23
+   Compiling zip v8.6.0
+   Compiling tempfile v3.27.0
+   Compiling tokenizers v0.23.2
+   Compiling scraper v0.24.0
+   Compiling axum v0.8.9
+   Compiling tar v0.4.46
+   Compiling tokio-tungstenite v0.23.1
+   Compiling reqwest v0.12.28
+   Compiling rust-embed v8.12.0
+   Compiling clap v4.6.6
+   Compiling uuid v1.26.0
+   Compiling tokio-stream v0.1.19
+   Compiling ignore v0.4.33
+   Compiling quick-xml v0.41.0
+warning: unused dependency `sha2`
+  --> crates/misaka-studio-core/Cargo.toml:16:1
+   |
+16 | sha2.workspace = true
+   | ^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `sha2`
+warning: `misaka-studio-core` (manifest) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 2m 49s
+
+
+phase3-runtime-check.log
+========================
+settings file : /workspace/scratch/e645501a7f4b/verification/release-smoke/data/settings.json
+data dir      : /workspace/scratch/e645501a7f4b/verification/release-smoke/data
+models dir    : /workspace/scratch/e645501a7f4b/verification/release-smoke/models
+bind          : 127.0.0.1:1338
+backend       : Mock
+ui            : built into this binary (79 files)
+ui (embedded) : 79 files
+api key       : not set
+
+
+phase3-ui-unit.log
+==================
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> misaka-studio-ui@0.1.0 test
+> node --test test/*.test.ts
+
+✔ a file as the agent left it is put back as it was (11.523417ms)
+✔ a file the agent created is removed (0.581878ms)
+✔ a file edited since the agent left it is not overwritten — unless the person says so (0.666446ms)
+✔ a created file edited since is not removed without asking (7.125901ms)
+✔ a file gone from disk is reported, and written back when confirmed (1.316606ms)
+✔ an untracked change cannot be reverted, and says why (0.491581ms)
+✔ the note a revert leaves tells the agent to read the file again (0.391952ms)
+✔ a tool call, its result, then an answer: the whole round trip (37.222449ms)
+✔ attachments go to the model with the message, but only the typed text is mined or pinned (1.221973ms)
+✔ an edit under "ask" waits, shows its diff, and a denial leaves the file alone and is told to the model (14.854942ms)
+✔ "Always allow" approves that kind for the rest of the thread (6.50169ms)
+✔ Stop while an approval waits: the call is not run and the run ends (0.971987ms)
+✔ Stop while the reply streams: what arrived is kept, and the call in it never runs (1.111016ms)
+✔ the same call three times in a row is not run the third time, and a fourth ends the run (10.33294ms)
+✔ an empty reply is answered once; a second in a row ends the run (1.622237ms)
+✔ a run stops at the step limit and says so (2.682788ms)
+✔ a write cut off by the token limit is never run, and the model is told to write in parts (6.453517ms)
+✔ read only: an edit is refused and explained, and the prompt never offered it (2.262413ms)
+✔ a policy changed mid-run applies from the next call (8.88799ms)
+✔ a failed request ends the run with the error on the step (0.670031ms)
+✔ an unknown tool is answered with the real ones, and the run goes on (15.402198ms)
+✔ auto edit applies an edit at once and lists it in Changes with its original (2.360351ms)
+✔ a call the model drafted inside its reasoning, cut there by the stop sequence, is the call it meant (0.412082ms)
+✔ calls left mid-flight by a closed window are settled when the next run starts (1.178098ms)
+✔ agent history: repeated tool results both stay, reasoning goes, failed text replies go (0.37148ms)
+✔ the supplied store URL opens before the model runs and each browser click requires approval (5.168208ms)
+✔ an unavailable Tor route ends the run after one request (0.964716ms)
+✔ source analysis falls back to an answer when follow-up tool calls are malformed (4.904238ms)
+✔ the XML-parameter form: the name, and every value verbatim but for one newline at each end (3.003422ms)
+✔ a value that starts with a blank line keeps it: only the format’s own newline goes (0.427055ms)
+✔ inline values (no newlines around them) are read as they are (1.850111ms)
+✔ a reply the stop sequence left open is complete once its </function> arrived (0.401035ms)
+✔ a call cut off inside a value is incomplete, even in a finished reply — it must never run (0.783382ms)
+✔ closing a stopped call reads an unterminated last value up to the close (the model forgot </parameter>) (0.268345ms)
+✔ streaming: a tag still arriving is held back, and a call still arriving is a tool segment, never XML (8.488036ms)
+✔ a lone "<" ending a finished reply is text; a recognisable start of a call is not (0.276407ms)
+✔ Hermes JSON calls, with the mistakes small models make repaired (6.506316ms)
+✔ a JSON call still streaming shows its name as soon as it has one (0.403589ms)
+✔ JSON arguments inside the XML form are read (0.29763ms)
+✔ reasoning is not text, and a call drafted inside it is not a call (0.171438ms)
+✔ a <function=…> block without its <tool_call> wrapper is still a call (0.207232ms)
+✔ a code fence that only wrapped a call is not shown (0.148383ms)
+✔ a value that mentions </parameter> is not cut short there (0.141194ms)
+✔ a closed call that cannot be read is answered with the format, not dropped (0.230157ms)
+✔ only the first call is kept, and a tool response the model imagined goes with the rest (0.231018ms)
+✔ the system prompt mirrors the template, and states the workspace, date and policy (0.734789ms)
+✔ read only offers no tool that changes anything — not even by name (0.759226ms)
+✔ the user’s own system prompt is kept as standing instructions (0.270088ms)
+✔ tool results are one message of <tool_response> blocks, nothing outside them (0.162666ms)
+✔ a long output keeps its head and tail and says what was left out (0.364721ms)
+✔ JSON repair escapes raw control characters and stray backslashes inside strings only (0.122355ms)
+✔ a call’s key ignores the order its arguments were written in (0.176426ms)
+✔ the policy table: reads never ask; edits ask only under "ask"; commands run alone only under "full auto" (11.394281ms)
+✔ arguments are coerced to what the tool declares, and required ones are checked (5.732439ms)
+✔ tool names small models reach for are understood (9.316966ms)
+✔ read_file: numbered lines under a header, and how to read on (4.007277ms)
+✔ read_file of a missing file is an error the model can act on (1.465761ms)
+✔ an edit that must be approved shows its diff first and touches nothing until it runs (2.90331ms)
+✔ an edit that cannot apply is answered at once, without asking anyone (2.455514ms)
+✔ line numbers copied from read_file are taken off old_string and new_string (1.29231ms)
+✔ write_file creates a file, and the change records it as created (7.267034ms)
+✔ write_file under "ask" previews the whole new file, and an identical write changes nothing (11.917891ms)
+✔ read only refuses every change and every command, and says how to get them (0.382978ms)
+✔ an unknown tool is answered with the tools there are (0.365111ms)
+✔ search: one match per line, and a clear answer when there is none (1.036123ms)
+✔ list_files: an indented tree relative to the folder listed (9.39793ms)
+✔ run_command: exit code and both streams for the model, and a stop is said as one (1.159309ms)
+✔ a long command output keeps its head and tail within the cap (0.632374ms)
+✔ numbered lines: right-aligned numbers, a tab, carriage returns dropped (0.17201ms)
+✔ the Changes list keeps the first original, drops a file back where it started, and will not keep huge files (0.495718ms)
+✔ the edit rules mirror the runtime: line endings, line-end whitespace, never indentation (0.366323ms)
+✔ line numbers are stripped only when every line carries one (0.1586ms)
+✔ the language comes from the extension, or from the whole name for files that have none (1.433092ms)
+✔ binary files are known by name, and by a NUL in their first bytes (0.495248ms)
+✔ a text file becomes an attachment with its name, size, content and language (3.979855ms)
+✔ a binary file is refused with a reason, whether its name or its bytes give it away (0.609129ms)
+✔ a file over the limit is cut to it and says so, keeping the original size (16.243507ms)
+✔ a cut inside a multi-byte character drops the partial character instead of ending in U+FFFD (0.501757ms)
+✔ workspace files keep their path, and duplicates are recognised (0.54373ms)
+✔ a true continuation is appended as is (1.489226ms)
+✔ a continuation that restates the end of the answer loses the restatement (0.293242ms)
+✔ a short coincidence is ordinary text, not an overlap (0.250048ms)
+✔ works while the continuation is still arriving (0.265941ms)
+✔ identical texts have no hunks (6.402971ms)
+✔ one changed line in the middle: one hunk, three lines of context either side (4.220747ms)
+✔ removed lines come before added ones in a replacement (0.466424ms)
+✔ changes close together share a hunk; far apart they do not (3.322793ms)
+✔ a created file is all additions from /dev/null (0.832717ms)
+✔ a deleted file is all removals to /dev/null (0.349388ms)
+✔ a last line that gains its newline is a change, marked in the patch (0.515638ms)
+✔ insertion at the top of a file and deletion at its end (0.651422ms)
+✔ a patch reads back to the same hunks and line numbers (1.533984ms)
+✔ every diff applies back to its target, on hundreds of random edits (177.694906ms)
+✔ the diff is minimal on a classic example (0.383949ms)
+✔ a huge rewrite settles for one replacement, quickly, and still applies (161.572733ms)
+✔ a small edit to a long file is exact and fast (2.641636ms)
+✔ line splitting keeps endings and counts like an editor (0.200643ms)
+✔ CRLF lines are compared with their endings but drawn without them (1.689469ms)
+✔ leaving and returning to a file shares the read and retains its completed bytes (1.791273ms)
+✔ the latest forced refresh owns the cache even when an older request finishes last (1.593043ms)
+✔ a workspace invalidation also prevents pending old bytes from repopulating it (0.578644ms)
+✔ rapid selections keep only two pending reads and preserve a shared request that was selected again (13.088001ms)
+✔ force and root invalidation abort pending I/O without touching another root or its completed cache (1.026418ms)
+✔ a read invalidated before dispatch never starts the API call (0.378871ms)
+✔ cancellation also works on WebViews without AbortSignal.reason or throwIfAborted (0.843392ms)
+✔ a cancelled forced refresh keeps display bytes but never treats them as a fresh read (0.695809ms)
+✔ same paths in different projects never share file bytes (8.726747ms)
+✔ failed reads can retry, and cached files retain their scroll positions (1.407093ms)
+✔ the file cache evicts the least recently used file at its bound (0.452733ms)
+✔ a 5000-entry explorer renders a bounded window and can reach its last row (0.256187ms)
+✔ directory reads share in-flight work and a late response cannot replace a refresh (0.679735ms)
+✔ the worker highlights source text while escaping HTML and handles unknown languages (63.043187ms)
+✔ file previews share one worker, reuse pending parses and cached colours, and survive worker failure (5.372135ms)
+✔ an invalidated visible preview waits for one fresh retry without an abort error or obsolete content (188.78227ms)
+✔ hiding the retained preview cancels its retry; reopening starts only the current read (35.396624ms)
+✔ changing the selected path stops the old retry and never restarts its hidden I/O (58.641646ms)
+✔ repeated in-flight invalidations back off with one timer, and genuine errors still finish loading (14.496712ms)
+✔ Chat sends queued follow-ups in order to the original conversation and skips removed items (49.961329ms)
+✔ Code waits for the tool and the final answer before running a queued follow-up (38.815542ms)
+✔ context lengths read the way windows are sized, from the floor class to 2M (19.663697ms)
+✔ tokens arriving in one frame publish one complete snapshot, including reasoning and the first-token time (6.217265ms)
+✔ finishing or stopping before the next frame flushes the latest partial text and cancels the frame (0.383388ms)
+✔ every character of the query must appear, in order (8.819757ms)
+✔ a blank query matches everything, with nothing to highlight (1.370448ms)
+✔ word starts beat letters in the middle of words (0.865005ms)
+✔ a contiguous run beats the same letters spread over word starts (5.900412ms)
+✔ the alignment is the best one, not the first that fits (0.273833ms)
+✔ matching ignores case and highlights exactly the matched text (0.443268ms)
+✔ a query that is the start of the text ranks above the same letters further in (0.552033ms)
+✔ the words of a query match in any order, and all of them must (4.966183ms)
+✔ Japanese titles match, and the ranges stay on the right characters (0.645164ms)
+✔ case folding never moves an index (0.527426ms)
+✔ a long text is matched as a substring, not a scattered subsequence (0.867799ms)
+✔ a quality floor keeps prefixes, acronyms and runs, and drops scattered letters (0.857473ms)
+✔ highlight parts cover the whole text, alternating (2.437618ms)
+✔ a snippet is cut around the hit, with whitespace collapsed and the hit marked (0.800558ms)
+✔ a snippet keeps the words before the hit, starting on a word boundary (0.366964ms)
+✔ a snippet needs every word of the query (0.330599ms)
+✔ background refreshes request only summary data and coalesce a burst into one trailing request (12.303944ms)
+✔ only a visible Changes consumer asks for counts; hiding it cancels the obsolete request and rejects late data (66.035561ms)
+✔ a shared detailed read stays alive until the last visible Changes consumer leaves (19.569044ms)
+✔ a looping reply is detected and cut back to before the loop (2.548394ms)
+✔ the fifteen-times conversation sends the question once and none of the failures (1.521846ms)
+✔ different questions keep their good replies, and failures between them are dropped (0.531582ms)
+✔ a reply being continued is kept, and an asked-again question with a good answer keeps only the newest pair (0.39797ms)
+✔ a short phrase over and over is a loop too, and is cut to one copy (0.302536ms)
+✔ a long answer that loops only at its end keeps its answer (2.96902ms)
+✔ a reply the runtime already cut short for repeating leaves nothing worth sending either (0.359482ms)
+✔ a reply that is only a loop leaves nothing worth sending (0.3113ms)
+✔ a retry hint rides on the question itself, not as a turn of its own (0.640887ms)
+✔ a retry hint is left off when there is no trailing user turn to fold it onto (0.250979ms)
+✔ streamed code avoids highlighting; finished blocks keep copy/wrap state across appended text and completion (133.430954ms)
+✔ safe links keep the external-open route, images never load, raw HTML stays inert, and math still renders (69.163861ms)
+✔ a late parse cannot inject old content after a replacement or an Activity hide/show (7.646967ms)
+✔ a failed worker leaves a large answer readable and asynchronously formats bounded completed answers (80.214358ms)
+✔ a non-responsive worker times out to the complete plain answer and releases queued updates (43.365408ms)
+✔ worker URL policy matches react-markdown for safe, relative and malicious URLs (1.882801ms)
+✔ raw HTML remains text and unsafe links cannot reach an href (35.75889ms)
+✔ GFM tables, task lists, references and fenced source keep their semantics (20.085955ms)
+✔ streaming leaves math and code as source; completed formulas render with safe KaTeX nodes (129.771463ms)
+✔ code, prices and URL dollar signs do not activate the optional math renderer (5.721092ms)
+✔ unchanged blocks retain identities, while a later reference definition correctly changes its block (3.233429ms)
+✔ hundreds of streaming updates run the first and latest parse, without an obsolete backlog (7.786103ms)
+✔ hidden/unmounted messages cancel deliveries and a live reply precedes queued history (2.450508ms)
+✔ ChatGPT-style display math becomes a $$ block and survives the stray-dollar escape (20.140398ms)
+✔ a $$ block the model wrote itself is left exactly as it is (0.959297ms)
+✔ inline forms: \( \) becomes $ $, and math-looking $ $ pairs are kept (1.136164ms)
+✔ dollars that are not delimiters are escaped so they cannot swallow a paragraph (0.754589ms)
+✔ fenced code is never touched (0.691083ms)
+✔ a formula next to prose with a price keeps only the formula (1.771233ms)
+✔ bare exponents, subscripts and Greek letters in an untouched reply are wrapped (0.578143ms)
+✔ a sentence with more than one bare formula wraps each and keeps the Japanese between them (0.313974ms)
+✔ a bare formula and a model-written $…$ formula in the same reply are both handled once (0.645193ms)
+✔ ordinary prose, lone letters and numbers, and unmarked point labels are left alone (0.996163ms)
+✔ a prime after a bare letter is not a derivative — it is what a contraction looks like (0.952297ms)
+✔ inline code is read as source, never as a bare formula (0.761589ms)
+✔ an empty queue does not visit message arrays or rewrite history (1.509357ms)
+✔ an unchanged poll reuses the history index instead of visiting 100,000 message positions (105.404048ms)
+✔ only changed messages and conversations are replaced, including duplicate references to a job (0.339733ms)
+✔ pending cadence expires by time and indexes a new message array after a real history change (0.199561ms)
+✔ a failed selection stays selected, sends to that model, and can be retried (11.485268ms)
+✔ new chats inherit the last choice; switching chats restores their individual model (0.494957ms)
+✔ rapid changes serialize loads and an older failure cannot clear the newest choice (0.975242ms)
+✔ Stop cancels a reply waiting for model preparation without waiting for the engine (0.866488ms)
+✔ selection survives persisted session hydration before the runtime is available (557.402219ms)
+✔ a burst of streamed tokens publishes once per frame and flushes the complete reply before returning (120.544962ms)
+✔ Stop keeps the last tokens even when the next animation frame has not run (15.94656ms)
+✔ a fresh chat gets a local model even when the stale startup setting names a mining artifact (1.335795ms)
+✔ explicit preferences survive missing files, offline runtimes and unloaded engines (0.206802ms)
+✔ the first default respects a resident model or configured local model and avoids models that do not fit (0.253542ms)
+✔ the input-path search reads names only, including the exact display label of Code sessions (11.593721ms)
+✔ split search preserves the previous title/body scope, snippets, first-message choice and result order (14.345214ms)
+✔ empty and one-character queries never scan messages; title search still works (0.551592ms)
+✔ large no-match histories do no synchronous work and yield repeatedly between bounded slices (19.547592ms)
+✔ an expired idle deadline makes one step and yields; wall-clock budget also yields (0.573465ms)
+✔ only the newest 40 body matches are searched, or fewer when title matches occupy slots (0.977214ms)
+✔ partial result snapshots are cumulative, immutable and stay in recency order (0.51694ms)
+✔ cancelling before or between slices prevents queued callbacks from reading or publishing stale results (0.611723ms)
+✔ 100 consumers share one status request and one timer at the fastest visible cadence (7.261546ms)
+✔ a slow read never accumulates interval work, and the next cadence starts after completion (13.820511ms)
+✔ refreshes after mutations collapse to one trailing read and discard the older response (2.652342ms)
+✔ hiding cancels work and resolves waiting refreshes even when a transport ignores abort (2.308413ms)
+✔ the last lease aborts an active manual refresh and releasing an earlier lease does not (0.96065ms)
+✔ a failed read preserves the last successful value and retries at the normal interval (1.150706ms)
+✔ dynamic cadence changes reuse the timer and completion events bring a later poll forward (1.281534ms)
+✔ a subscriber can request a fresh read during publication without receiving a placeholder promise (0.632955ms)
+✔ reasoning-only length finish retries once without thinking and preserves the question and pinned notes (2.573543ms)
+✔ a failed recovery is surfaced and never loops into a third request (0.415176ms)
+✔ partial answers, normal stops, errors, and thinking already off never trigger a retry (0.870153ms)
+✔ Stop between reasoning and recovery aborts without sending a second request (2.203374ms)
+✔ a reply with no reasoning is all answer (4.341966ms)
+✔ a closed think block at the start is split off, and the answer starts at its first character (0.259762ms)
+✔ an unclosed block is the model still thinking, and a closing tag still arriving is not shown (0.191129ms)
+✔ the opening tag arriving token by token is thinking, not a stray "<" in the answer (0.15912ms)
+✔ an empty think block — a model asked not to think — leaves no reasoning behind (0.113732ms)
+✔ a template that pre-fills <think> leaves only the closing tag, on its own line (2.188913ms)
+✔ a reply that talks about the tags keeps them as text (0.69632ms)
+✔ the live preview is the end of the reasoning, cut at a word boundary (0.379752ms)
+✔ durations read the way the block says them (1.407213ms)
+✔ one changed conversation serializes only that conversation, preserving other records and list order (68.387661ms)
+✔ 1000 navigation changes write one small navigation record and never rewrite history or index (2.260641ms)
+✔ v1 and v2 sessions migrate on data change without removing their original recovery copy (1.111316ms)
+✔ legacy navigation stays small without forcing a migration, including a missing old model preference (6.289199ms)
+✔ quota during migration removes staging records and continues saving in the old format (6.56158ms)
+✔ record, backup and final-index failures leave the previous complete snapshot and retry the newest data (1.906887ms)
+✔ repeated storage failures are reported once until a successful save (0.584001ms)
+✔ a failed final commit also collects records orphaned by replacing the previous index (7.852868ms)
+✔ a valid current index recovers only its listed IDs and never resurrects a deleted legacy conversation (0.88171ms)
+✔ an empty committed index stays empty even when its legacy and previous backups contain conversations (1.132939ms)
+✔ a damaged primary index falls back to the previous snapshot without overwriting the damaged source on read (0.363579ms)
+✔ a primary index with duplicate conversation IDs is rejected in favor of a complete previous snapshot (0.581467ms)
+✔ unrecoverable legacy or per-conversation corruption blocks automatic overwrite and retains the original bytes (7.396759ms)
+✔ a damaged navigation record cannot hide history or inject a replacement conversations array (0.533545ms)
+✔ obsolete record versions are collected while the current and previous versions remain readable (0.443119ms)
+✔ a stale window cannot overwrite a newer committed history snapshot (0.307725ms)
+✔ invalid duplicate IDs are refused without corrupting a legacy or segmented snapshot (0.297579ms)
+✔ rehydration cancels an older queued write, and clear removes all owned records without touching other keys (0.601157ms)
+✔ an interrupted clear leaves a tombstone so legacy or backup data cannot reappear (0.308236ms)
+✔ automatic migration yields after 16 records and commits only after every record is present (1.298029ms)
+✔ pagehide flush finishes a staged migration and the newer edit queued while it was yielding (1.168834ms)
+✔ rehydration during staging drops only uncommitted records and leaves the last committed session (0.340253ms)
+✔ a folder is matched without its trailing separator (2.190144ms)
+✔ sessions are grouped by folder, the folder with the newest activity first (1.290657ms)
+✔ starred sessions float to the top of their project (0.187512ms)
+✔ recent folders without sessions follow, in the order they were used, and only once (0.227122ms)
+✔ sessions without a folder are listed last, under their own heading (0.196847ms)
+✔ nothing to show is an empty list (0.191429ms)
+✔ ages are short enough for a sidebar row (0.367445ms)
+✔ a dirty tree is summed up in a line, a clean one not at all (0.233071ms)
+✔ an untouched session is called a session (0.392161ms)
+✔ an agent thread is on the Code side, every other thread on the Chat side (2.909109ms)
+✔ the most recent thread is picked within the side only (0.203737ms)
+✔ switching sides comes back to the thread the side had open (0.167112ms)
+✔ a remembered thread that is gone or changed sides falls back to the newest on the side (0.123807ms)
+✔ a side with no threads opens on nothing — its empty page (0.118438ms)
+✔ a new session goes where the work is: the session in view, the last session, the last folder (0.189637ms)
+✔ the slash token is read while it is typed: the name first, then the argument (6.342509ms)
+✔ the menu lists every command for a bare slash, and the matching ones as the name is typed (1.443447ms)
+✔ only a known command is a command: anything else is sent as the message it is (8.767779ms)
+✔ on and off, in the spellings people use (0.17847ms)
+✔ a model is found from any part of its name (0.816381ms)
+✔ a mention starts at an @ that begins a word and runs to the caret (0.207403ms)
+✔ choosing a file replaces the mention with its path and puts the caret after it (0.192671ms)
+✔ an argument is single-quoted, and a quote inside it closes, escapes and reopens (4.640561ms)
+✔ a command runs in the directory with a cd prefix; the folder itself needs none (0.662841ms)
+✔ the prompt names the folder and the directory within it (0.251199ms)
+✔ a lone cd is recognised with its argument; anything else is left to the shell (2.293271ms)
+✔ what cd cannot do here is said, not guessed (1.229746ms)
+✔ relative paths resolve against the directory, with . and .. (0.897284ms)
+✔ leaving the folder is refused, however it is spelled (0.999498ms)
+✔ an absolute path or ~ path inside the folder is turned into a relative one (0.897234ms)
+✔ cd - goes back to the previous directory, when there is one (0.388095ms)
+✔ normalising a relative path keeps POSIX backslashes as characters (0.539113ms)
+✔ history keeps one copy of each command, newest last, and at most its limit (2.660944ms)
+✔ ↑ walks back to the oldest command and ↓ returns to the line being typed (0.493785ms)
+✔ output keeps one segment per run of a stream (0.515628ms)
+✔ past the cap the start goes and the tail is kept, cut at a line break (27.214982ms)
+✔ a cap that drops a whole segment drops it, and stderr stays where it was in the tail (0.540575ms)
+✔ escapes are removed and a redrawn line shows only its last drawing (0.732245ms)
+✔ durations read the way a person says them (0.528688ms)
+✔ the outcome says how the command ended (0.763312ms)
+✔ a transcript is the prompt and command, the output, and the outcome (0.36487ms)
+✔ a block becomes a text attachment named for its command (0.793226ms)
+✔ an attachment past the limit keeps the end of the output, where the verdict is (19.888657ms)
+✔ a 10,000-message conversation mounts only its viewport and overscan, including the very first and last messages (12.416193ms)
+✔ variable-height boundaries and end offsets resolve to the correct message (1.322265ms)
+✔ measuring earlier rows preserves the visible message and its offset instead of jumping the reader (0.599885ms)
+✔ repeated live-row measurements update total height without changing preceding offsets (6.175327ms)
+✔ empty, invalid and temporarily hidden measurements keep a usable index (0.273252ms)
+✔ Web requires explicit consent, mining off and a local engine; off and legacy settings stay offline (3.667894ms)
+✔ Chat offers only Web tools; Code offers them only with Web enabled (2.501635ms)
+✔ research returns cited evidence, propagates cancellation and rechecks consent before executing (1.839184ms)
+✔ tool evidence is bounded and identified as untrusted data (0.222616ms)
+✔ website requests retain the hash route and explicit implementation stays in Code (1.851974ms)
+✔ a website summary can read rendered text without pausing for browser approval (2.547995ms)
+ℹ tests 295
+ℹ suites 0
+ℹ pass 295
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2811.921617
+
+
+phase3-ui-workbench.log
+=======================
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> misaka-studio-ui@0.1.0 test:workbench
+> node scripts/test-workbench.mjs
+
+PASS retained panes mount on first visit and keep their DOM/state while pausing effects
+PASS revealing an existing approval does not move keyboard focus onto Approve
+PASS unvisited screens do not eagerly load their APIs
+PASS StrictMode startup shares the core bootstrap instead of sending it twice
+PASS chat draft, selection, transcript node and reading position survive navigation
+PASS Models keeps the selected Discover tab and its search draft
+PASS an unsaved message edit keeps its text and selection when the chat is restored
+PASS Monitor keeps the newest 120 samples while hidden without recording again on reveal
+PASS Settings preserves unsaved values and its scroll container
+PASS hidden Settings stops install polling and resumes exactly one poll on return
+PASS one main surface is visible and window subscriptions survive repeated navigation
+PASS returning to a recent conversation reuses its transcript and shows updates made while hidden
+PASS a fourth recent transcript evicts only the least recently viewed DOM, preserving all messages
+PASS visiting an empty new chat retains recent transcripts and its own unsent draft
+PASS Files renders only the visible rows of a 5000-entry folder and supports End/Home
+PASS file previews retain their DOM and reading position across panel switches without rereading
+PASS the same file path in two projects never displays bytes from the other project
+PASS Terminal keeps an unsent command and reading position through tab, close and Chat/Code switches
+PASS Terminal drafts stay with their project and no command runs when a panel is restored
+Virtual transcript DOM: 9 of 2000 message rows mounted initially.
+PASS a 2,000-message thread mounts a bounded initial viewport without truncating history
+PASS scrolling a virtual transcript reaches its oldest, middle and newest messages
+PASS live tokens update one row without filtering history again or moving an upward-scrolled reader
+PASS editing the last user message reaches an unmounted row and preserves its draft while scrolled away
+PASS pending approval remains reachable through an explicit review action after virtualization
+PASS measuring a row above the viewport preserves the reading anchor
+PASS measured content growth follows the bottom only while the user is following
+PASS open tabs switch conversations and close without deleting history or drafts
+PASS Activity bar stays mounted while sidebar scroll and keyboard resizing are retained
+PASS 5000 conversation sidebar mounts one window and keyboard End/Home reaches the entire archive
+PASS Quick Open searches titles, honors IME and opens by Enter without scanning message bodies
+PASS tab bookkeeping stays bounded and deleting history removes its tab
+PASS Quick Open file requests discard a stale response after the query changes
+PASS command palette shows titles immediately, then merges body matches without changing an explicit keyboard selection
+PASS command palette discards previous-query results immediately and cancels queued searches on query change or close
+PASS Network panels and window chrome share each status request on visibility restore
+PASS leaving Network aborts its pending reads and returning reconnects exactly once
+PASS remote status and Stop stay available while its log read stalls or fails
+
+Workbench DOM checks: 37/37 passed.
+These are state/lifecycle checks; no browser latency measurement is claimed.
+npm notice
+npm notice New major version of npm available! 11.19.1 -> 12.2.3
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3
+npm notice To update run: npm install -g npm@12.2.3
+npm notice
+
+
+phase3-ui-build.log
+===================
+dist/assets/KaTeX_SansSerif-Regular-CS6fqUqJ.woff      12.32 kB
+dist/assets/KaTeX_Caligraphic-Regular-wX97UBjC.ttf     12.34 kB
+dist/assets/KaTeX_Caligraphic-Bold-ATXxdsX0.ttf        12.37 kB
+dist/assets/KaTeX_Fraktur-Regular-Dxdc4cR9.woff        13.21 kB
+dist/assets/KaTeX_Fraktur-Bold-BsDP51OF.woff           13.30 kB
+dist/assets/KaTeX_Typewriter-Regular-CO6r4hn1.woff2    13.57 kB
+dist/assets/KaTeX_SansSerif-Italic-DN2j7dab.woff       14.11 kB
+dist/assets/KaTeX_SansSerif-Bold-DbIhKOiC.woff         14.41 kB
+dist/assets/KaTeX_Typewriter-Regular-C0xS9mPB.woff     16.03 kB
+dist/assets/KaTeX_Math-BoldItalic-CZnvNsCZ.woff2       16.40 kB
+dist/assets/KaTeX_Math-Italic-t53AETM-.woff2           16.44 kB
+dist/assets/KaTeX_Script-Regular-C5JkGWo-.ttf          16.65 kB
+dist/assets/KaTeX_Main-BoldItalic-DxDJ3AOS.woff2       16.78 kB
+dist/assets/KaTeX_Main-Italic-NWA7e6Wa.woff2           16.99 kB
+dist/assets/KaTeX_Math-BoldItalic-iY-2wyZ7.woff        18.67 kB
+dist/assets/KaTeX_Math-Italic-DA0__PXp.woff            18.75 kB
+dist/assets/KaTeX_Main-BoldItalic-SpSLRI95.woff        19.41 kB
+dist/assets/KaTeX_SansSerif-Regular-BNo7hRIc.ttf       19.44 kB
+dist/assets/KaTeX_Fraktur-Regular-CB_wures.ttf         19.57 kB
+dist/assets/KaTeX_Fraktur-Bold-BdnERNNW.ttf            19.58 kB
+dist/assets/KaTeX_Main-Italic-BMLOBm91.woff            19.68 kB
+dist/assets/KaTeX_SansSerif-Italic-YYjJ1zSn.ttf        22.36 kB
+dist/assets/KaTeX_SansSerif-Bold-CFMepnvq.ttf          24.50 kB
+dist/assets/KaTeX_Main-Bold-Cx986IdX.woff2             25.32 kB
+dist/assets/KaTeX_Main-Regular-B22Nviop.woff2          26.27 kB
+dist/assets/KaTeX_Typewriter-Regular-D3Ib7_Hf.ttf      27.56 kB
+dist/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2           28.08 kB
+dist/assets/KaTeX_Main-Bold-Jm3AIy58.woff              29.91 kB
+dist/assets/KaTeX_Main-Regular-Dr94JaBh.woff           30.77 kB
+dist/assets/KaTeX_Math-BoldItalic-B3XSjfu4.ttf         31.20 kB
+dist/assets/KaTeX_Math-Italic-flOr_0UB.ttf             31.31 kB
+dist/assets/KaTeX_Main-BoldItalic-DzxPMmG6.ttf         32.97 kB
+dist/assets/KaTeX_AMS-Regular-DMm9YOAa.woff            33.52 kB
+dist/assets/KaTeX_Main-Italic-3WenGoN9.ttf             33.58 kB
+dist/assets/KaTeX_Main-Bold-waoOVXN0.ttf               51.34 kB
+dist/assets/KaTeX_Main-Regular-ypZvNtVU.ttf            53.58 kB
+dist/assets/KaTeX_AMS-Regular-DRggAlZN.ttf             63.63 kB
+dist/assets/markdown.worker-D8aAiKwi.js               159.64 kB
+dist/assets/highlight.worker-BqduGbbr.js              165.32 kB
+dist/assets/index-eaOakXzv.js                         459.16 kB
+dist/assets/katex-kZZgQk4m.css                         29.90 kB │ gzip:   8.08 kB
+dist/assets/index-AWkSS91x.css                         89.92 kB │ gzip:  14.51 kB
+dist/assets/MiningQueuePanel-BsGPpSLy.js                4.15 kB │ gzip:   1.64 kB │ map:     9.62 kB
+dist/assets/index-Cwa9H_Hy.js                           6.13 kB │ gzip:   2.36 kB │ map:    33.81 kB
+dist/assets/ImageView-B03gGwKo.js                       7.00 kB │ gzip:   2.54 kB │ map:    19.05 kB
+dist/assets/MonitorView-B7FX4rAA.js                     9.19 kB │ gzip:   3.06 kB │ map:    23.00 kB
+dist/assets/ModelsView-CFub6pRV.js                     14.61 kB │ gzip:   4.55 kB │ map:    38.44 kB
+dist/assets/MiningCatalog-TVe9L6ks.js                  15.10 kB │ gzip:   4.54 kB │ map:    35.69 kB
+dist/assets/SettingsView-DZcGwdjt.js                   24.42 kB │ gzip:   7.55 kB │ map:    58.60 kB
+dist/assets/NetworkView-B8VVbsT4.js                    40.28 kB │ gzip:  11.36 kB │ map:    95.61 kB
+dist/assets/processor--1ITiBPY.js                     157.41 kB │ gzip:  50.67 kB │ map:   903.27 kB
+dist/assets/ChatView-BJ1Zd-A1.js                      223.61 kB │ gzip:  67.34 kB │ map:   685.66 kB
+dist/assets/index-C-6eK1YX.js                         441.05 kB │ gzip: 133.22 kB │ map: 1,592.04 kB
+dist/assets/index-D6_SDxdD.js                         465.15 kB │ gzip: 151.24 kB │ map: 1,867.97 kB
+✓ built in 6.76s
+npm notice
+npm notice New major version of npm available! 11.19.1 -> 12.2.3
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3
+npm notice To update run: npm install -g npm@12.2.3
+npm notice
+
+
+phase3-markdown-worker.log
+==========================
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> misaka-studio-ui@0.1.0 test:markdown-worker
+> node scripts/test-markdown-worker.mjs
+
+PASS production Markdown worker: DOM-free startup, entities, GFM, lazy math, URL/HTML safety, stable blocks
+
+
+phase3-desktop.log
+==================
+✔ darwin build replaces a stale staged runtime after building the UI (4.546329ms)
+✔ darwin dev replaces a stale staged runtime after building the UI (1.500744ms)
+✔ win32 build replaces a stale staged runtime after building the UI (1.615248ms)
+✔ win32 dev replaces a stale staged runtime after building the UI (1.304138ms)
+✔ linux build replaces a stale staged runtime after building the UI (1.537009ms)
+✔ linux dev replaces a stale staged runtime after building the UI (1.493974ms)
+✔ a failed build aborts packaging instead of silently using a stale resource (1.593024ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 210.749846

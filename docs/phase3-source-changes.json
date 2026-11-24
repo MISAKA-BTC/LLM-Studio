@@ -1,0 +1,272 @@
+{
+  "schema": 1,
+  "comparison": "Immutable phase-2 delivery ZIP versus final phase-3 source; generated ui/dist and documentation are outside this source manifest.",
+  "baseline_archive_sha256": "b64017ca391749646b1cf19623a5cae3aab422923bfeb50aca75facd26fea3dc",
+  "changed_source_files": 44,
+  "changes": [
+    {
+      "path": "crates/misaka-studio-core/src/hardware.rs",
+      "status": "modified",
+      "phase2_sha256": "d733ebc9033cf10bdfc19e1c3a2712d975e034b0bea0b884792dcdc678ad9f22",
+      "phase3_sha256": "21567fcd063629e6556f07ed13bfb035bc2eaea4d33eed0797a80799d4f07f3e"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/api/management.rs",
+      "status": "modified",
+      "phase2_sha256": "ba0bc52e99ec0ab31ce0855a4e106893e26b1ee2ac77f4979eab982c006b5d16",
+      "phase3_sha256": "6c0161a15822cadae0bdc5e3c2f471f953e96c37b545714fc3b1b6e15966ff5d"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/api/workspace.rs",
+      "status": "modified",
+      "phase2_sha256": "6701b392bdf96615f87002e03cdbb2b9625bdcb65c318e2f6f3c95eb5b9bf8a0",
+      "phase3_sha256": "3bfd608413b28187ae786e373305b438bc27bad51f607873c06042dd0a3119e4"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/backend/gateway.rs",
+      "status": "modified",
+      "phase2_sha256": "04dfbd5179e3369b319b5f024c67b6e70b5f8d995017de45062ca1ba615af902",
+      "phase3_sha256": "cfc1f2d69b729366065eea693799df3ebe717ccd1b2ed7f8628293022a92eeae"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/backend/mock.rs",
+      "status": "modified",
+      "phase2_sha256": "5db0c5e5ab5435017cc4513f5bebdfe7673436bbd441c5f6e8d437ed29adafa0",
+      "phase3_sha256": "385dd4fe381b8a63d1106563c38f928433eda67c456f85981ecbd788f29e0bd2"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/backend/openai_child.rs",
+      "status": "modified",
+      "phase2_sha256": "1e725f8b47df7edde95f92b580b390a688867be9ee35c5b09f7c8f99b35d8266",
+      "phase3_sha256": "3c15f13b06e0d6110902ca12b378ff67009dca6dbb442846b7f128ab9126a572"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/catalog.rs",
+      "status": "modified",
+      "phase2_sha256": "1ad60b74b61bd829baa257322006b0f71648a899926e6a58e24e22201a42eeed",
+      "phase3_sha256": "8c4bb3ed53e0897f7a6efa7f97c11f977f96cc85c7a72c0e72d9bc7787730a0b"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/context/mod.rs",
+      "status": "modified",
+      "phase2_sha256": "d5be34ebfd2c2813e6b496d33e1ad67a2b33e249796ae866f93596190e432e39",
+      "phase3_sha256": "8aa37caa5e8cbe3eb26db2e5d1b00c2b7757e47444b83cc1458d104a6fe827d7"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/context/work.rs",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "c806efbb68db4b2508ca39df3be62a83cf0f415a15bf986bcf7219df1aa0e102"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/metrics.rs",
+      "status": "modified",
+      "phase2_sha256": "378635a55d5009cee434ed74884786fa2a0b5e781b20f9fa72f92900d91634ce",
+      "phase3_sha256": "a916eb916da714113a4d15d9ff955c2efc034534f80d03eb855be858bace7ef9"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/state.rs",
+      "status": "modified",
+      "phase2_sha256": "fd23c4a7e6bd9df8ef7e61fe26f59037330ffa8d30eda487955362c90e01971b",
+      "phase3_sha256": "47e69ac9ca11f4a22391d7e3a0258aadb9996948a20f79f7e0a75486b4bc73ef"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/store.rs",
+      "status": "modified",
+      "phase2_sha256": "3af7291d088ebd9d506388fc34865ee663366c89bd5cce9da344c134a2f11283",
+      "phase3_sha256": "9544d9b2f0073803b70a18e1f6004ab7774d7da8473f36fe48ae97fdf6820474"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/workspace.rs",
+      "status": "modified",
+      "phase2_sha256": "c2d2033bf1145f8f3b1c3aa7833d55034cf5d460213135f69b04d1f43f5cd8f2",
+      "phase3_sha256": "bcb4693e7c967629193f9c0885999af41730087b5b5a69ae85f6dd6326c8dc8a"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/workspace/git.rs",
+      "status": "modified",
+      "phase2_sha256": "40aa54e84ba81fdee32bedffb9c1d056956b98f7b23a59d84bf552c3898e4ca0",
+      "phase3_sha256": "9f661d092ab68269631cd988326d5149d1d3e6bfd4a8d9b2ec9c7d1073059d31"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/src/workspace/performance_tests.rs",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "599085cbf22d18d96de139b2742f11afb6a299e49dfdd5887dc3f3d5a96d0fe5"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/tests/inference_cancellation.rs",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "0e1039cc17f241120a127602913b4ba9a2f609a694406970bbd71b9fa3368835"
+    },
+    {
+      "path": "crates/misaka-studio-runtime/tests/workspace_git_and_terminal.rs",
+      "status": "modified",
+      "phase2_sha256": "f0bd26caec91fd8090611da9c36be420f07bd441681259ba1abf6ab906bbdb6c",
+      "phase3_sha256": "e557e6396950e19826ff52a9fd4b6e3797fde466475826b223b58a3f1d8b99f6"
+    },
+    {
+      "path": "ui/scripts/check-runtime-polling.mjs",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "6fa021cc298f5c6a4bf0a5942717e06e2d571f2f42ca110ecb764b6c2c03d635"
+    },
+    {
+      "path": "ui/scripts/test-workbench.mjs",
+      "status": "modified",
+      "phase2_sha256": "6930ad6d197e7dc9086fa6c205412c0cc117b0cb4cf12a9dafd3b80938c73065",
+      "phase3_sha256": "f186b550dca9d874c15db9445d3d4010ea7b3cf2d4866e57ea5455484bae7be3"
+    },
+    {
+      "path": "ui/src/components/MiningQueuePanel.tsx",
+      "status": "modified",
+      "phase2_sha256": "fbee7feacf32513b4fef97ac03d30bcbfbfbe00b113780b8d5c7cecccb9ed687",
+      "phase3_sha256": "1bab3080577a018d65a6ee7216fd62fea27b190daa37d5aaf1927978f8af51b2"
+    },
+    {
+      "path": "ui/src/components/ModelMarketPanel.tsx",
+      "status": "modified",
+      "phase2_sha256": "812851b13afe7c3657cf1e5c6b654bfafb691a12cebf0b109b323bbf03f3d905",
+      "phase3_sha256": "f52c5c09165cefec4979bab90a5a68a2ea436759c1dc908d3c2023975909208f"
+    },
+    {
+      "path": "ui/src/components/NetworkView.tsx",
+      "status": "modified",
+      "phase2_sha256": "375f909857b3c34d88511dcfa28485dd514554c2194e6a761e472fae024f397f",
+      "phase3_sha256": "fc042e2f43633b8efa0347908360cc4b07ee90e569680e4f3cdec3bf0d955e1d"
+    },
+    {
+      "path": "ui/src/components/PromptStackPanel.tsx",
+      "status": "modified",
+      "phase2_sha256": "c7aa226bf29d3e302f92d67c6f89f4f21d96403325d12c0dbb872465fb574890",
+      "phase3_sha256": "5fa79e6fdb3161a527abcb73ae9fc06d37d7e56138da7e78a13c4a9945fe2f9a"
+    },
+    {
+      "path": "ui/src/components/RemoteMinerPanel.tsx",
+      "status": "modified",
+      "phase2_sha256": "6b0bbad276721a7dc02314e5a75a45de0ff98faf17d052b00fb3a4b7aa1d086f",
+      "phase3_sha256": "30a0c556e1f5e08c5298cfba03896e8c3f334622d7973580420bc3aa0e5871c7"
+    },
+    {
+      "path": "ui/src/components/chat/Composer.tsx",
+      "status": "modified",
+      "phase2_sha256": "d441d76eb3031094c1e66c6047e2214d7ea8fe73474b31280fbab18b19abd982",
+      "phase3_sha256": "389a2fd48e08f22f3ff77ed9df4fab17f085cc2eaf30f4ab5fd008316078ede1"
+    },
+    {
+      "path": "ui/src/components/code/FilesPanel.tsx",
+      "status": "modified",
+      "phase2_sha256": "8ea7290cb22db1a4b1c8b15225192e5826b21bc30933d619b529aacbf5b56118",
+      "phase3_sha256": "ff350f7c2db3eaef0a9c9a0876991ab6d9e1107848c8cc44ea64ec2edc6b1bbe"
+    },
+    {
+      "path": "ui/src/components/code/GitChangesPanel.tsx",
+      "status": "modified",
+      "phase2_sha256": "e6a55d2428bf9b4d4b21c8d681ca0d0f62daaacda8f977c18a7985ba149ebe7d",
+      "phase3_sha256": "063c95b7098226159408e59e3be48bdb5a3652fc27eb054d81e2cbd64194f99a"
+    },
+    {
+      "path": "ui/src/components/code/SessionPanel.tsx",
+      "status": "modified",
+      "phase2_sha256": "15d7bf0db6d2bc9aab28327f19d851b3d120653b67f1adf96bbf65c956d4031f",
+      "phase3_sha256": "3770597ff7126efd45dd471d4319c5ceb2f5300c9d17bc003db2dbd7c7fcaab8"
+    },
+    {
+      "path": "ui/src/components/code/fileCache.ts",
+      "status": "modified",
+      "phase2_sha256": "91511001237070ce3aea036a398453950ca93e9a67f8859d0f418999df774866",
+      "phase3_sha256": "54d4fb97b4cc616497bd27efb211b49863df07624c285f421990c1d6a5940403"
+    },
+    {
+      "path": "ui/src/components/code/gitStore.ts",
+      "status": "modified",
+      "phase2_sha256": "9adb77936a5004a422568c995f124a39efa134b93d45e34e5ebff5ef4e4f6c24",
+      "phase3_sha256": "b59bf2c73fd00f32141bccb588c25f38df119d5b6ba6ab89562a1517b696e157"
+    },
+    {
+      "path": "ui/src/components/shell/QuickOpen.tsx",
+      "status": "modified",
+      "phase2_sha256": "b58b7bb4981eab527723b9e8b28ff7c9d94228ef8e840d7c8d26075d968320e1",
+      "phase3_sha256": "397a347ef2cd2ffa6ed75217d453c91338c951ab1af9962290561f2cbbd9e3ea"
+    },
+    {
+      "path": "ui/src/components/shell/mining.ts",
+      "status": "modified",
+      "phase2_sha256": "40941514389677f4a184deb48708242e3452e94267560f25b82d82d5f1f038bf",
+      "phase3_sha256": "5ee85dfe98e526fd9b916ddb3c386b2b266eee8786dd863ef0124c9cebf23cd1"
+    },
+    {
+      "path": "ui/src/components/shell/useVisiblePolling.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "98806d9b7f01c44d4dba786b5e62ced5a2034c1e6d4d2573469a88aab94f0d41"
+    },
+    {
+      "path": "ui/src/lib/api.ts",
+      "status": "modified",
+      "phase2_sha256": "d3daf81b5d28785097deec71d4c80bf332728649b8f6a43df2f5dd66ae42cb6a",
+      "phase3_sha256": "3bd40cc217399f30fd7daebecf85c90b9b5c711db9822236e4a73b52bff1ba47"
+    },
+    {
+      "path": "ui/src/lib/miningReconcile.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "d04491a3b3a57dc068d3cf3a1252d2b2bdb5caee334b76b6232ed5bd93621536"
+    },
+    {
+      "path": "ui/src/lib/polling.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "a9e8cc773b4b26e2c58aaee181b05f311d46b2d15e538d1b8dfda2dc1cc545df"
+    },
+    {
+      "path": "ui/src/lib/runtimeResources.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "6e66d185f5607c730016110db5d7c4a3cf992213b2198e3a7a02f63b3daaa6fc"
+    },
+    {
+      "path": "ui/src/lib/types.ts",
+      "status": "modified",
+      "phase2_sha256": "55b70b4036c483a35a984e518462bd6de47eb3574d91b73a7b6f0b5644511d49",
+      "phase3_sha256": "3236509ed33f037280d000f56c55112b352a4d0b31dbcbbc9e8717dfcef33775"
+    },
+    {
+      "path": "ui/src/store/studio.ts",
+      "status": "modified",
+      "phase2_sha256": "e7445ceeeab2cbd986eb5793be8b70ac7eecaee388fc600677cb3ef4c9935d33",
+      "phase3_sha256": "6b8dc1ba703e3661602d6b73f19f496f2c15a717caf519483a31e6d24ad8ecb9"
+    },
+    {
+      "path": "ui/test/editor-cache.test.ts",
+      "status": "modified",
+      "phase2_sha256": "5f75fb7f17eee0027e75dcb1cdbb28a21cf99fb1b3790b209deca74ba1aa490d",
+      "phase3_sha256": "976c0165a69de8d566875878cd5c22226aad4da1069dfe044140ad4ba26dd827"
+    },
+    {
+      "path": "ui/test/file-viewer-cancellation.test.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "c41e6cb7029418c59c754045ce4165acf230e8137f5177371981d1a13cb38976"
+    },
+    {
+      "path": "ui/test/git-status-lifecycle.test.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "ae308fc2fcbe7ce2378306941ef5d4089624565bc54e57feabd0fb488ec2fa60"
+    },
+    {
+      "path": "ui/test/mining-reconcile.test.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "4ff392df101ed5a3a39c501b5e81525d3fd0acd0a0ea04b4ec723b915d751405"
+    },
+    {
+      "path": "ui/test/polling.test.ts",
+      "status": "added",
+      "phase2_sha256": null,
+      "phase3_sha256": "dfa9e0789c0e415198b58c1a772cabc72e5d380d7ac13668ab4517ece22d6393"
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "date": "2026-11-24",
+  "scope": "UI read scheduling, shared status services, bootstrap, incremental mining reconciliation, Git details and file-preview cancellation.",
+  "results": {
+    "ui_unit_tests_passed": 295,
+    "ui_unit_tests_failed": 0,
+    "actual_app_dom_passed": 37,
+    "actual_app_dom_total": 37
+  },
+  "native_ui_latency_measured": false,
+  "operation_checks": [
+    {
+      "source": "ui/test/polling.test.ts",
+      "condition": "100 consumers of one resource",
+      "requests_in_flight": 1,
+      "scheduled_timers": 1
+    },
+    {
+      "source": "ui/test/polling.test.ts",
+      "condition": "100 explicit refresh requests arrive during an older read",
+      "trailing_reads": 1,
+      "older_snapshot_published": false
+    },
+    {
+      "source": "ui/test/polling.test.ts",
+      "condition": "hidden window, released consumers, ignored abort transport, dynamic cadence and offline recovery",
+      "verified": "no unbounded work, waiting refreshes released, stale responses ignored, one resumed read"
+    },
+    {
+      "source": "ui/test/mining-reconcile.test.ts",
+      "messages_in_fixture": 100000,
+      "tracked_jobs": 1,
+      "warm_message_position_reads_per_poll": 1,
+      "polls": 100,
+      "history_preserved": true
+    },
+    {
+      "source": "ui/test/editor-cache.test.ts",
+      "pending_file_limit": 2,
+      "verified": "same-key sharing, LRU pending cancellation, force/invalidate cancellation, immediate abort-race resolution, stale response rejection, older-WebView abort fallback"
+    },
+    {
+      "source": "ui/test/file-viewer-cancellation.test.ts",
+      "dom_tests": 4,
+      "verified": "visible abort recovery, 20 invalidations coalesced, seven successive cancellations bounded, no hidden/path-switched retry, no old bytes rendered"
+    },
+    {
+      "source": "ui/test/git-status-lifecycle.test.ts",
+      "dom_tests": 3,
+      "verified": "summary while hidden, details only while visible, shared leases, cancelling obsolete detail requests"
+    },
+    {
+      "source": "ui/scripts/test-workbench.mjs",
+      "condition": "React StrictMode startup",
+      "core_bootstrap_requests_per_endpoint": 1
+    },
+    {
+      "source": "ui/scripts/check-runtime-polling.mjs",
+      "condition": "window visibility restored with both Network panels and chrome mounted",
+      "requests_per_status_endpoint": 1
+    },
+    {
+      "source": "ui/scripts/check-runtime-polling.mjs",
+      "condition": "navigate away from Network while three view-only reads wait",
+      "cancelled_reads": 3,
+      "resumed_reads_per_endpoint": 1
+    },
+    {
+      "source": "ui/scripts/check-runtime-polling.mjs",
+      "condition": "remote-miner log stalls or fails while status succeeds",
+      "verified": "running status and Stop remain available; no mining or signing action executed"
+    }
+  ],
+  "limits": [
+    "DOM checks run the real React components in jsdom, without native WebView layout or paint.",
+    "Counts are the assertions of the listed workloads, not a measured percentage improvement in user input latency.",
+    "UI still retains the window-level runtime subscriptions and the existing 120-sample monitor history.",
+    "The final production build and production Markdown worker gate are recorded in phase3-validation.json."
+  ],
+  "reproduce": [
+    "npm --prefix ui test",
+    "npm --prefix ui run test:workbench",
+    "npm --prefix ui run build",
+    "npm --prefix ui run test:markdown-worker"
+  ],
+  "logs": {
+    "unit_sha256": "8d30b130f40f1698518d8d5316b5faa1b749847458170fafd1e4a8616c79531c",
+    "workbench_sha256": "2dcf95ef040c01f99f866ad3e0eb778ed1b13d919278d4b9c0f8626cbac3c233"
+  }
+}

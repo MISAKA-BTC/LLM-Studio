@@ -36,9 +36,13 @@ export function isMissingEndpoint(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 404 || error.status === 405 || error.status === 501)
 }
 
-const inflight = new Map<string, Promise<void>>()
+type GitRequest = { promise: Promise<void>; controller: AbortController; includeCounts: boolean }
+const inflight = new Map<string, GitRequest>()
 const again = new Set<string>()
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
+// Activity disconnects effects while a pane is hidden. Only a currently visible Changes view
+// keeps this count above zero; background refreshes need paths/branch, not every file's diff.
+const detailReaders = new Map<string, number>()
 
 function patch(root: string, update: Partial<GitEntry>) {
   useGit.setState((s) => {
@@ -49,17 +53,25 @@ function patch(root: string, update: Partial<GitEntry>) {
 
 /** Ask the runtime now. */
 export function refreshGit(root: string): Promise<void> {
+  const includeCounts = (detailReaders.get(root) ?? 0) > 0
   const running = inflight.get(root)
   if (running) {
     again.add(root)
-    return running
+    // A view becoming visible/hidden changes the work needed. Cancel the superseded request;
+    // a result from an older backend that ignores AbortSignal is guarded below as well.
+    if (running.includeCounts !== includeCounts) running.controller.abort()
+    return running.promise
   }
   patch(root, { loading: true })
+  const controller = new AbortController()
   const request = api.workspace
-    .gitStatus(root)
+    .gitStatus(root, controller.signal, { includeCounts })
     .then(
-      (status) => patch(root, { status, unsupported: false, error: null, loading: false, at: Date.now() }),
+      (status) => {
+        if (!controller.signal.aborted) patch(root, { status, unsupported: false, error: null, loading: false, at: Date.now() })
+      },
       (error: unknown) => {
+        if (controller.signal.aborted) return
         if (isMissingEndpoint(error)) patch(root, { status: null, unsupported: true, error: null, loading: false, at: Date.now() })
         // A failed read keeps the last good one on screen, with the failure beside it.
         else patch(root, { error: (error as Error).message, loading: false, at: Date.now() })
@@ -67,9 +79,10 @@ export function refreshGit(root: string): Promise<void> {
     )
     .finally(() => {
       inflight.delete(root)
+      if (controller.signal.aborted) patch(root, { loading: false })
       if (again.delete(root)) void refreshGit(root)
     })
-  inflight.set(root, request)
+  inflight.set(root, { promise: request, controller, includeCounts })
   return request
 }
 
@@ -87,14 +100,32 @@ export function scheduleGitRefresh(root: string, delayMs = 400): void {
 }
 
 /** The folder's git status for a component, read when missing or stale. */
-export function useGitStatus(root: string | null | undefined): GitEntry | null {
+export function useGitStatus(root: string | null | undefined, includeCounts = false): GitEntry | null {
   const entry = useGit((s) => (root ? (s.byRoot[root] ?? null) : null))
   useEffect(() => {
     if (!root) return
+    if (includeCounts) detailReaders.set(root, (detailReaders.get(root) ?? 0) + 1)
     const current = useGit.getState().byRoot[root]
-    if (current && (current.loading || Date.now() - current.at < FRESH_MS)) return
-    void refreshGit(root)
-  }, [root])
+    const request = inflight.get(root)
+    const needsCounts = includeCounts && current?.status?.counts_included === false
+    if (includeCounts && request && !request.includeCounts) void refreshGit(root)
+    else if (!current || (!current.loading && (needsCounts || Date.now() - current.at >= FRESH_MS))) void refreshGit(root)
+    return () => {
+      if (!includeCounts) return
+      const remaining = (detailReaders.get(root) ?? 1) - 1
+      if (remaining > 0) detailReaders.set(root, remaining)
+      else {
+        detailReaders.delete(root)
+        // An ongoing numstat/content scan has no visible consumer now. A lightweight refresh
+        // will still deliver the latest branch and changed-file list to other panes.
+        const request = inflight.get(root)
+        if (request?.includeCounts) {
+          again.add(root)
+          request.controller.abort()
+        }
+      }
+    }
+  }, [root, includeCounts])
   return entry
 }
 

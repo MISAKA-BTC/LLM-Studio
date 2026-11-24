@@ -25,6 +25,7 @@
 
 pub mod summarizer;
 pub mod tokens;
+pub(crate) mod work;
 
 use crate::backend::{ChatMessage, answer_room};
 use serde::Serialize;

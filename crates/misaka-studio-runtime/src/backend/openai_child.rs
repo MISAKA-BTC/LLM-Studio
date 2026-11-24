@@ -42,6 +42,12 @@ const LOG_LINES: usize = 400;
 /// How often the health endpoint is polled while waiting for a load.
 const HEALTH_POLL: Duration = Duration::from_millis(250);
 
+const VERSION_SUCCESS_TTL: Duration = Duration::from_secs(5);
+const VERSION_FAILURE_TTL: Duration = Duration::from_secs(1);
+// Match the device probe's ceiling: a cold driver may need a few seconds, but a hung version
+// command must not hold every runtime-status request forever.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Builds an engine's command line from a load request and the port it should listen on.
 ///
 /// A named type rather than the inline `Box<dyn Fn…>` so the one thing that differs between
@@ -85,6 +91,13 @@ struct Running {
     model: LoadedModel,
 }
 
+type VersionStamp = (Option<std::time::SystemTime>, u64);
+struct CachedVersion {
+    stamp: Option<VersionStamp>,
+    checked_at: Instant,
+    output: Option<String>,
+}
+
 /// A supervised OpenAI-compatible engine.
 pub struct ChildEngine {
     config: ChildEngineConfig,
@@ -93,6 +106,9 @@ pub struct ChildEngine {
     running: Arc<RwLock<Option<Running>>>,
     log: Arc<Mutex<VecDeque<String>>>,
     http: reqwest::Client,
+    /// Singleflight for version/status probes. This lock is independent of the running engine;
+    /// a diagnostic must not block unloading or cancelling an inference.
+    version: tokio::sync::Mutex<Option<CachedVersion>>,
 }
 
 impl ChildEngine {
@@ -105,6 +121,7 @@ impl ChildEngine {
             // environment variables must never intercept this connection.
             // No overall timeout: a generation legitimately runs for minutes.
             http: reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5)).build().expect("http client builds"),
+            version: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -147,19 +164,56 @@ impl ChildEngine {
         }
     }
 
-    /// `<program> --version`, stdout and stderr together.
+    /// `<program> --version`, stdout and stderr together, shared briefly by status readers.
     ///
     /// Both streams, because llama.cpp prints its version banner to stderr and other engines
     /// print to stdout, and a version parser that reads the wrong one silently reports "unknown"
     /// forever.
     pub async fn version_output(&self) -> Option<String> {
-        let out = tokio::process::Command::new(&self.config.program)
-            .arg("--version")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .ok()?;
+        self.version_output_with(false).await
+    }
+
+    async fn version_stamp(&self) -> Option<VersionStamp> {
+        let metadata = tokio::fs::metadata(&self.config.program).await.ok()?;
+        Some((metadata.modified().ok(), metadata.len()))
+    }
+
+    async fn version_output_with(&self, fresh: bool) -> Option<String> {
+        let mut cached = self.version.lock().await;
+        let stamp = self.version_stamp().await;
+        if !fresh
+            && let Some(hit) = cached.as_ref()
+            && hit.stamp == stamp
+            && hit.checked_at.elapsed() < if hit.output.is_some() { VERSION_SUCCESS_TTL } else { VERSION_FAILURE_TTL }
+        {
+            return hit.output.clone();
+        }
+        let output = self.run_version(VERSION_TIMEOUT).await;
+        // An install/replacement during the probe is not a reusable answer about either file.
+        *cached =
+            (stamp == self.version_stamp().await).then(|| CachedVersion { stamp, checked_at: Instant::now(), output: output.clone() });
+        output
+    }
+
+    async fn run_version(&self, timeout: Duration) -> Option<String> {
+        let mut command = tokio::process::Command::new(&self.config.program);
+        command.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        // Match the actual engine's working directory. A protected inherited directory can
+        // otherwise leave a version-only process waiting on an OS permission dialog.
+        if self.config.program.is_absolute()
+            && let Some(parent) = self.config.program.parent()
+            && tokio::fs::metadata(parent).await.is_ok_and(|metadata| metadata.is_dir())
+        {
+            command.current_dir(parent);
+        }
+        let out = match tokio::time::timeout(timeout, command.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(_)) => return None,
+            Err(_) => {
+                tracing::warn!(program = %self.config.program.display(), "engine version probe timed out");
+                return None;
+            }
+        };
         let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&out.stderr));
         Some(text)
@@ -224,12 +278,6 @@ impl ChildEngine {
                     message: format!("engine exited with {status} before it was ready:\n{}", tail.join("\n")),
                 });
             }
-            if let Ok(resp) = self.http.get(&health).send().await
-                && resp.status().is_success()
-            {
-                health_body = resp.json::<serde_json::Value>().await.ok();
-                break;
-            }
             if Instant::now() >= deadline {
                 let _ = child.kill().await;
                 return Err(Error::Engine {
@@ -242,7 +290,22 @@ impl ChildEngine {
                     ),
                 });
             }
-            tokio::time::sleep(HEALTH_POLL).await;
+            // The startup budget covers receiving headers AND the health body. An engine that
+            // accepts TCP but stops replying must not hold the model-load queue past its deadline.
+            let probe = async {
+                let response = self.http.get(&health).send().await.ok()?;
+                if !response.status().is_success() {
+                    return None;
+                }
+                // A successful health response need not be JSON. Preserve that compatibility;
+                // timing out while reading it is different and is handled by the outer timeout.
+                Some(response.json::<serde_json::Value>().await.ok())
+            };
+            if let Ok(Some(body)) = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), probe).await {
+                health_body = body;
+                break;
+            }
+            tokio::time::sleep(HEALTH_POLL.min(deadline.saturating_duration_since(Instant::now()))).await;
         }
 
         // **The engine's own window wins over the one we asked for.**
@@ -436,7 +499,9 @@ impl ChildEngine {
 
     /// The runtime identity of an engine we did not build.
     pub async fn descriptor(&self, accelerator_tag: &str) -> RuntimeDescriptor {
-        let (commit, build_number) = self.version_output().await.map(|v| parse_version(&v)).unwrap_or((None, None));
+        // Identity belongs to this load, not to a status poll from a few seconds before it.
+        // Serialize with other probes, but always obtain a fresh banner for provenance.
+        let (commit, build_number) = self.version_output_with(true).await.map(|v| parse_version(&v)).unwrap_or((None, None));
         RuntimeDescriptor {
             backend: self.config.name.into(),
             engine_commit: commit.unwrap_or_else(|| "unknown".into()),
@@ -658,6 +723,9 @@ fn parse_version(text: &str) -> (Option<String>, Option<u64>) {
 /// accumulate in a buffer and only whole lines are parsed.
 pub(crate) struct SseParser {
     buffer: Vec<u8>,
+    /// Bytes already checked for a newline in the unfinished line. Network fragments may be
+    /// one byte long; rescanning that line from its beginning would make a long delta quadratic.
+    scanned: usize,
     chat: bool,
     /// Characters generated — answer and reasoning both, since both were decoded — for the usage
     /// estimate when the engine reports none.
@@ -677,18 +745,36 @@ pub(crate) struct SseParser {
 
 impl SseParser {
     pub(crate) fn new(chat: bool) -> Self {
-        SseParser { buffer: Vec::new(), chat, text_len: 0, usage: None, finish_reason: None, error: None, done_marker: false }
+        SseParser {
+            buffer: Vec::new(),
+            scanned: 0,
+            chat,
+            text_len: 0,
+            usage: None,
+            finish_reason: None,
+            error: None,
+            done_marker: false,
+        }
     }
 
     pub(crate) fn push(&mut self, bytes: &[u8]) -> Vec<StreamEvent> {
+        self.push_with_metadata(bytes, |_| {})
+    }
+
+    /// Let an adapter inspect extensions while each JSON frame is already parsed. In particular,
+    /// the gateway's claim receipt must not require buffering/reparsing the entire response.
+    pub(crate) fn push_with_metadata(&mut self, bytes: &[u8], mut metadata: impl FnMut(&serde_json::Value)) -> Vec<StreamEvent> {
         if self.done_marker {
             return Vec::new();
         }
         self.buffer.extend_from_slice(bytes);
         let mut events = Vec::new();
-        while let Some(idx) = self.buffer.iter().position(|&b| b == b'\n') {
-            let line: Vec<u8> = self.buffer.drain(..=idx).collect();
-            let line = String::from_utf8_lossy(&line);
+        let mut consumed = 0;
+        while let Some(offset) = self.buffer[self.scanned..].iter().position(|&b| b == b'\n') {
+            let end = self.scanned + offset + 1;
+            let line = String::from_utf8_lossy(&self.buffer[consumed..end]);
+            consumed = end;
+            self.scanned = end;
             let line = line.trim();
             let Some(payload) = line.strip_prefix("data:") else { continue };
             let payload = payload.trim();
@@ -700,6 +786,7 @@ impl SseParser {
                 continue;
             }
             let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) else { continue };
+            metadata(&json);
 
             if let Some(message) = json.get("error").and_then(|e| e.get("message").or(Some(e))).map(|m| match m.as_str() {
                 Some(text) => text.to_string(),
@@ -745,6 +832,14 @@ impl SseParser {
                 events.push(StreamEvent::Delta(text.to_string()));
             }
         }
+        // Compact once per received chunk, not once per SSE line. A batched response can carry
+        // thousands of lines; repeatedly draining their prefixes moved the same suffix each time.
+        if self.done_marker {
+            self.buffer.clear();
+        } else if consumed > 0 {
+            self.buffer.drain(..consumed);
+        }
+        self.scanned = self.buffer.len();
         events
     }
 
@@ -776,6 +871,183 @@ impl SseParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn version_engine(program: PathBuf) -> ChildEngine {
+        ChildEngine::new(ChildEngineConfig {
+            name: "version-test",
+            program,
+            args: Box::new(|_, _| vec![]),
+            health_path: "/health",
+            context_from_health: None,
+            startup_timeout: Duration::from_secs(1),
+            env: vec![],
+            offload_from_log: None,
+        })
+    }
+
+    #[cfg(unix)]
+    fn shell_path(path: &std::path::Path) -> String {
+        format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+    }
+
+    #[cfg(unix)]
+    fn write_program(path: &std::path::Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn version_status_is_singleflight_and_short_lived_but_provenance_always_probes_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("engine");
+        let calls = dir.path().join("calls");
+        write_program(
+            &program,
+            &format!("printf 'probe\\n' >> {}\nprintf 'version: 7 (abc123)\\n'\nprintf 'stderr detail\\n' >&2", shell_path(&calls)),
+        );
+        let engine = version_engine(program);
+        let (a, b, c, d) =
+            tokio::join!(engine.version_output(), engine.version_output(), engine.version_output(), engine.version_output());
+        assert_eq!(a.as_deref(), Some("version: 7 (abc123)\nstderr detail\n"));
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(a, d);
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 1, "concurrent status calls share one process");
+        let descriptor = engine.descriptor("cpu").await;
+        assert_eq!(descriptor.engine_commit, "abc123");
+        assert_eq!(descriptor.engine_build_number, 7);
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap().lines().count(),
+            2,
+            "load provenance does not reuse the availability banner"
+        );
+        assert!(engine.version_output().await.is_some());
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2);
+        engine.version.lock().await.as_mut().unwrap().checked_at -= VERSION_SUCCESS_TTL;
+        assert!(engine.version_output().await.is_some());
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 3, "a status success is not a permanent fact");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn installing_replacing_and_removing_the_binary_invalidate_version_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("engine");
+        let engine = version_engine(program.clone());
+        assert!(engine.version_output().await.is_none());
+        write_program(&program, "printf 'version: 1 (old123)\\n'");
+        assert!(engine.version_output().await.unwrap().contains("old123"), "installation invalidates the cached failure immediately");
+        write_program(&program, "printf 'version: 200 (new456789)\\n'");
+        assert!(engine.version_output().await.unwrap().contains("new456789"));
+        std::fs::remove_file(&program).unwrap();
+        assert!(engine.version_output().await.is_none(), "removal invalidates a still-fresh success");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_version_probe_is_retried_after_its_short_ttl_even_without_a_file_change() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("engine");
+        write_program(&program, "printf 'version: 1 (abc123)\\n'");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let engine = version_engine(program.clone());
+        assert!(engine.version_output().await.is_none());
+        let stamp = engine.version_stamp().await;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(engine.version_stamp().await, stamp, "chmod leaves mtime and size unchanged");
+        engine.version.lock().await.as_mut().unwrap().checked_at -= VERSION_FAILURE_TTL;
+        assert!(engine.version_output().await.unwrap().contains("abc123"));
+    }
+
+    #[cfg(unix)]
+    async fn wait_until_process_exits(pid: i32) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if unsafe { libc::kill(pid, 0) } == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the version-only child must not survive cancellation");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_hung_version_probe_times_out_and_its_child_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("engine");
+        let pid_file = dir.path().join("pid");
+        write_program(&program, &format!("printf '%s' \"$$\" > {}\nexec sleep 30", shell_path(&pid_file)));
+        let engine = version_engine(program);
+        assert!(engine.run_version(Duration::from_secs(2)).await.is_none());
+        let pid = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+        wait_until_process_exits(pid).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelling_a_version_status_request_kills_the_probe_and_releases_singleflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("engine");
+        let pid_file = dir.path().join("pid");
+        write_program(&program, &format!("printf '%s' \"$$\" > {}\nexec sleep 30", shell_path(&pid_file)));
+        let engine = Arc::new(version_engine(program));
+        let request_engine = engine.clone();
+        let request = tokio::spawn(async move { request_engine.version_output().await });
+        let pid = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(text) = tokio::fs::read_to_string(&pid_file).await
+                    && let Ok(pid) = text.parse::<i32>()
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        wait_until_process_exits(pid).await;
+        assert!(tokio::time::timeout(Duration::from_secs(1), engine.version.lock()).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn a_long_unicode_delta_survives_single_byte_fragments() {
+        let text = "日本語🙂 mixed text ".repeat(2048);
+        let frame = format!("data: {}\r\n\r\n", serde_json::json!({ "choices": [{ "delta": { "content": text } }] }));
+        let mut parser = SseParser::new(true);
+        let events: Vec<_> = frame.as_bytes().iter().flat_map(|byte| parser.push(&[*byte])).collect();
+        assert_eq!(events, vec![StreamEvent::Delta(text)]);
+        assert!(parser.buffer.is_empty());
+    }
+
+    #[test]
+    fn many_batched_frames_and_an_unfinished_tail_preserve_every_event() {
+        let mut parser = SseParser::new(true);
+        let mut body = String::new();
+        let mut expected = Vec::new();
+        for index in 0..4096 {
+            let text = format!("token {index}");
+            body.push_str(&format!("data: {}\n\n", serde_json::json!({ "choices": [{ "delta": { "content": text } }] })));
+            expected.push(StreamEvent::Delta(text));
+        }
+        body.push_str("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"最後");
+        assert_eq!(parser.push(body.as_bytes()), expected);
+        assert_eq!(
+            parser.push("の思考\"}}]}\n\ndata: [DONE]\n\nignored tail".as_bytes()),
+            vec![StreamEvent::Reasoning("最後の思考".into())]
+        );
+        assert!(parser.is_complete());
+        assert!(parser.buffer.is_empty());
+        assert!(parser.push(b"data: ignored after DONE\n").is_empty());
+    }
 
     #[test]
     fn done_is_a_terminal_sse_frame_even_when_more_bytes_follow() {

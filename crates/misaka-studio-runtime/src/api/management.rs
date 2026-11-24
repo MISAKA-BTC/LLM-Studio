@@ -47,6 +47,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .nest("/images", crate::api::images::router())
         .route("/catalog/search", get(search))
         .route("/catalog/repo/{*repo}", get(repo))
+        .route("/catalog/readme/{*repo}", get(readme))
+        .route("/catalog/download", post(download_variant))
         .route("/downloads", get(list_downloads).post(start_download))
         .route("/downloads/stream", get(downloads_stream))
         .route("/downloads/{*id}", delete(cancel_download))
@@ -98,8 +100,8 @@ async fn system(State(state): State<Arc<AppState>>) -> Json<SystemInfo> {
     })
 }
 
-async fn metrics_now(State(state): State<Arc<AppState>>) -> Json<crate::metrics::RuntimeSample> {
-    Json(state.metrics.sample().await)
+async fn metrics_now(State(state): State<Arc<AppState>>) -> Result<Json<crate::metrics::RuntimeSample>> {
+    Ok(Json(state.metrics.sample().await?))
 }
 
 /// Live metrics over SSE.
@@ -154,19 +156,29 @@ fn views(models: &[LocalModel], hardware: &HardwareSnapshot, settings: &Settings
         .collect()
 }
 
-async fn list_models(State(state): State<Arc<AppState>>) -> Json<Vec<ModelView>> {
+async fn model_views(state: &AppState, models: Arc<Vec<LocalModel>>) -> Result<Vec<ModelView>> {
+    let hardware = state.hardware.clone();
+    let settings = state.settings.read().await.clone();
+    // Strata profile resolution reads files and canonicalizes paths. Fit/identity calculation
+    // over a large model list also belongs off the runtime's inference/network workers.
+    tokio::task::spawn_blocking(move || views(&models, &hardware, &settings))
+        .await
+        .map_err(|e| Error::io("model views", std::io::Error::other(e)))
+}
+
+async fn list_models(State(state): State<Arc<AppState>>) -> Result<Json<Vec<ModelView>>> {
     let models = state.store.list().await;
-    Json(views(&models, &state.hardware, &*state.settings.read().await))
+    Ok(Json(model_views(&state, models).await?))
 }
 
 async fn refresh_models(State(state): State<Arc<AppState>>) -> Result<Json<Vec<ModelView>>> {
     let models = state.store.refresh().await?;
-    Ok(Json(views(&models, &state.hardware, &*state.settings.read().await)))
+    Ok(Json(model_views(&state, models).await?))
 }
 
 async fn get_model(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<ModelView>> {
     let model = state.store.require(&id).await?;
-    Ok(Json(views(&[model], &state.hardware, &*state.settings.read().await).remove(0)))
+    Ok(Json(model_views(&state, Arc::new(vec![model])).await?.remove(0)))
 }
 
 async fn delete_model(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>> {
@@ -209,7 +221,7 @@ async fn hash_model(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
     if state.loaded().await.map(|s| s.model.id) == Some(id) {
         state.resolve_identity().await?;
     }
-    Ok(Json(views(&[model], &state.hardware, &*state.settings.read().await).remove(0)))
+    Ok(Json(model_views(&state, Arc::new(vec![model])).await?.remove(0)))
 }
 
 #[derive(Deserialize)]
@@ -234,17 +246,21 @@ async fn context_plan(
         None => state.settings.read().await.generation.max_tokens,
     };
     let continues = state.backend().await.continues_assistant_turn();
-    let draft = crate::context::plan(&crate::context::PlanInputs {
-        messages: &body.messages,
-        pinned: &body.pinned,
-        window: loaded.loaded.context_size as u64,
-        max_tokens,
-        counter: &counter,
-        engine_continues_turns: continues,
-        count_scale_permille: 1000,
+    let report = crate::context::work::run(move || -> Result<_> {
+        let draft = crate::context::plan(&crate::context::PlanInputs {
+            messages: &body.messages,
+            pinned: &body.pinned,
+            window: loaded.loaded.context_size as u64,
+            max_tokens,
+            counter: &counter,
+            engine_continues_turns: continues,
+            count_scale_permille: 1000,
+        })
+        .map_err(Error::bad_request)?;
+        Ok(draft.finish(None, &counter, None).report)
     })
-    .map_err(Error::bad_request)?;
-    Ok(Json(draft.finish(None, &counter, None).report))
+    .await??;
+    Ok(Json(report))
 }
 
 async fn runtime_status(State(state): State<Arc<AppState>>) -> Json<RuntimeStatus> {
@@ -283,9 +299,14 @@ async fn backends(State(state): State<Arc<AppState>>) -> Json<Vec<BackendInfo>> 
 
 #[derive(Deserialize)]
 struct SearchQuery {
+    #[serde(default)]
     q: String,
     #[serde(default = "default_limit")]
     limit: usize,
+    #[serde(default)]
+    format: crate::catalog::SearchFormat,
+    #[serde(default)]
+    sort: crate::catalog::SearchSort,
 }
 
 fn default_limit() -> usize {
@@ -297,7 +318,7 @@ async fn search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<crate::catalog::CatalogEntry>>> {
     let catalog = state.catalog().await;
-    Ok(Json(catalog.search(&query.q, query.limit).await?))
+    Ok(Json(catalog.search_models(&query.q, query.limit, query.format, query.sort).await?))
 }
 
 #[derive(Deserialize)]
@@ -313,6 +334,34 @@ async fn repo(
 ) -> Result<Json<crate::catalog::CatalogRepo>> {
     let catalog = state.catalog().await;
     Ok(Json(catalog.repo(&repo, query.revision.as_deref()).await?))
+}
+
+async fn readme(
+    State(state): State<Arc<AppState>>,
+    Path(repo): Path<String>,
+    Query(query): Query<RevisionQuery>,
+) -> Result<Json<Option<String>>> {
+    Ok(Json(state.catalog().await.readme(&repo, query.revision.as_deref()).await?))
+}
+
+#[derive(Deserialize)]
+struct DownloadVariant {
+    repo: String,
+    revision: String,
+    variant: String,
+}
+
+async fn download_variant(State(state): State<Arc<AppState>>, Json(body): Json<DownloadVariant>) -> Result<Json<DownloadProgress>> {
+    let catalog = state.catalog().await;
+    let mut repo = catalog.repo(&body.repo, Some(&body.revision)).await?;
+    let index = repo
+        .variants
+        .iter()
+        .position(|variant| variant.id == body.variant)
+        .ok_or_else(|| Error::bad_request("This download option is unavailable at the selected revision"))?;
+    let variant = repo.variants.swap_remove(index);
+    let root = state.settings.read().await.models_dir.clone();
+    Ok(Json(state.downloads.start_variant(&catalog, state.store.clone(), root, repo, variant).await?))
 }
 
 async fn list_downloads(State(state): State<Arc<AppState>>) -> Json<Vec<DownloadProgress>> {

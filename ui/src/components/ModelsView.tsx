@@ -5,14 +5,16 @@
 // for this machine, and the installed list gets the runtime's real arithmetic (weights + KV cache
 // at the context it would actually load with) rather than a guess.
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '../lib/api'
-import { bytes, count, eta, params, rate, relativeTime, tokens } from '../lib/format'
-import type { CatalogEntry, CatalogRepo, DownloadProgress, HardwareSnapshot } from '../lib/types'
+import { bytes, eta, params, rate, relativeTime, tokens } from '../lib/format'
+import type { DownloadProgress } from '../lib/types'
 import { useStudio } from '../store/studio'
 import { EmptyState, FitBadge, Icon, QuantBadge, Spinner } from './common'
 import { ContextBadge } from './ContextBadge'
-import { InstalledMiningArtifacts, MiningCatalog, PublishedPalwModels } from './MiningCatalog'
+import { InstalledMiningArtifacts } from './MiningCatalog'
+import { ModelSearch } from './ModelSearch'
+import { RetainedView } from './shell/RetainedView'
 
 export function ModelsView() {
   const [tab, setTab] = useState<'installed' | 'discover'>('installed')
@@ -30,12 +32,13 @@ export function ModelsView() {
             <button
               key={value}
               type="button"
+              aria-pressed={tab === value}
               onClick={() => setTab(value)}
-              className={`rounded-md px-3 py-1 text-sm capitalize transition-colors ${
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${
                 tab === value ? 'bg-white font-medium shadow-sm dark:bg-ink-800' : 'text-ink-600 dark:text-ink-400'
               }`}
             >
-              {value}
+              {value === 'discover' ? 'Model Search' : 'Installed'}
               {value === 'installed' && models.length > 0 && <span className="ml-1.5 text-xs text-ink-500">{models.length}</span>}
             </button>
           ))}
@@ -48,16 +51,19 @@ export function ModelsView() {
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {active.length > 0 && <DownloadsPanel downloads={downloads} />}
-        {tab === 'installed' ? (
-          <>
+      {active.length > 0 && <DownloadsPanel downloads={downloads} />}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <RetainedView active={tab === 'installed'}>
+          <div className="h-full overflow-y-auto" data-model-tab="installed">
             <InstalledMiningArtifacts />
             <InstalledList />
-          </>
-        ) : (
-          <DiscoverPanel />
-        )}
+          </div>
+        </RetainedView>
+        <RetainedView active={tab === 'discover'}>
+          <div className="flex h-full min-h-0 flex-col" data-model-tab="discover">
+            <ModelSearch />
+          </div>
+        </RetainedView>
       </div>
     </div>
   )
@@ -73,7 +79,7 @@ function DownloadsPanel({ downloads }: { downloads: DownloadProgress[] }) {
   }
 
   return (
-    <div className="border-b border-ink-200 bg-ink-100/60 px-4 py-3 dark:border-ink-800 dark:bg-ink-900/40">
+    <div className="max-h-[30vh] shrink-0 overflow-y-auto border-b border-ink-200 bg-ink-100/60 px-4 py-3 dark:border-ink-800 dark:bg-ink-900/40">
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400">Downloading</h3>
       <div className="space-y-3">
         {downloads
@@ -86,7 +92,7 @@ function DownloadsPanel({ downloads }: { downloads: DownloadProgress[] }) {
               <div key={download.id} className="card p-3">
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{download.model_id}</div>
+                    <div className="truncate text-sm font-medium">{download.id.startsWith('catalog/') ? download.file : download.model_id}</div>
                     <div className="truncate text-[0.7rem] text-ink-500 dark:text-ink-400">{download.repo}</div>
                   </div>
                   <button type="button" className="btn-ghost px-1.5 py-1" title="Cancel" onClick={() => void cancel(download.id)}>
@@ -132,7 +138,7 @@ function InstalledList() {
     return (
       <EmptyState icon="cube" title="No models installed">
         Models live in <code className="mono">{system?.models_dir ?? 'the model directory'}</code>. Put a <code className="mono">.gguf</code>{' '}
-        file there and rescan, or open <strong>Discover</strong> to download one.
+        file there and rescan, or open <strong>Model Search</strong> to download one.
       </EmptyState>
     )
   }
@@ -148,7 +154,7 @@ function InstalledList() {
             <div className="flex flex-wrap items-start gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="truncate text-sm font-semibold">{model.id}</h3>
+                  <h3 className="truncate text-sm font-semibold">{model.name}</h3>
                   <QuantBadge quantization={model.quantization} architecture={model.architecture} />
                   {isLoaded && <span className="badge bg-arc-600 text-white">loaded</span>}
                   {/* A class artifact sits in the models directory beside the GGUFs and is not one:
@@ -157,9 +163,9 @@ function InstalledList() {
                   {isMiningArtifact && (
                     <span
                       className="badge bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
-                      title="A PALW class artifact: the node mines with this file. It is not a chat model."
+                      title="PALW artifact. Mining eligibility is listed under Mining classes."
                     >
-                      mining artifact
+                      PALW artifact
                     </span>
                   )}
                   {model.expert_count && <span className="badge bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300">MoE · {model.expert_count} experts</span>}
@@ -287,215 +293,6 @@ function InstalledList() {
           </div>
         )
       })}
-    </div>
-  )
-}
-
-/**
- * A rough fit check for a file that is not downloaded yet.
- *
- * Only the size is known before download — no layer count, no KV-cache shape — so this adds a
- * flat 15 % for runtime overhead and says "estimated". Once the file is on disk the runtime does
- * the real arithmetic; presenting this as anything more than a hint would be dishonest.
- */
-function estimateFit(size: number | null, hardware: HardwareSnapshot | undefined): { label: string; tone: string } | null {
-  if (!size || !hardware) return null
-  const gpu = Math.max(0, ...hardware.accelerators.filter((a) => a.kind !== 'cpu').map((a) => a.usable_memory ?? 0))
-  const ram = Math.max(0, hardware.total_memory - 2 * 1024 ** 3)
-  const needed = size * 1.15
-  if (gpu > 0 && needed <= gpu) return { label: 'fits in VRAM (est.)', tone: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' }
-  if (needed <= ram) return { label: 'fits in RAM (est.)', tone: 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300' }
-  return { label: 'too large for this machine (est.)', tone: 'bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300' }
-}
-
-function DiscoverPanel() {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<CatalogEntry[] | null>(null)
-  const [searching, setSearching] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [openRepo, setOpenRepo] = useState<string | null>(null)
-  const system = useStudio((s) => s.system)
-
-  const search = async (text: string) => {
-    if (!text.trim()) return
-    setSearching(true)
-    setError(null)
-    setOpenRepo(null)
-    try {
-      setResults(await api.search(text.trim()))
-    } catch (e) {
-      setError((e as Error).message)
-      setResults(null)
-    } finally {
-      setSearching(false)
-    }
-  }
-
-  return (
-    <div className="p-4">
-      {/* The chain's own list first. It is short, fixed, and unguessable — nobody types
-          "Misakachain/Qwen3.6-35B-A3B-PALW-runtime" into a search box — so a search-only Discover
-          hid the only models on this page that can earn anything. */}
-      <MiningCatalog />
-      <PublishedPalwModels />
-
-      <h3 className="mt-6 text-sm font-semibold">Any other GGUF model</h3>
-      <p className="mb-3 mt-1 text-xs text-ink-500 dark:text-ink-400">
-        Chat models, from the whole of Hugging Face. These do not mine — they are for talking to.
-      </p>
-
-      <form
-        className="flex gap-2"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void search(query)
-        }}
-      >
-        <div className="relative flex-1">
-          <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-400" />
-          <input
-            className="input pl-9"
-            placeholder="Search Hugging Face for GGUF models — qwen3, llama, gemma, deepseek…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-        <button type="submit" className="btn-primary" disabled={searching || !query.trim()}>
-          {searching ? <Spinner className="size-3.5" /> : <Icon name="search" className="size-3.5" />}
-          Search
-        </button>
-      </form>
-
-      <p className="mt-2 text-[0.7rem] text-ink-500 dark:text-ink-400">
-        Searching <span className="mono">{system?.catalog_endpoint ?? 'huggingface.co'}</span> · only repositories with GGUF files are
-        listed, because those are the ones this runtime can load.
-      </p>
-
-      {error && (
-        <div className="card mt-4 border-red-300 p-3 text-sm text-red-700 dark:border-red-900 dark:text-red-300">
-          <div className="flex gap-2">
-            <Icon name="warning" className="mt-0.5 size-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-        </div>
-      )}
-
-      {results?.length === 0 && <EmptyState icon="search" title="Nothing found">Try a shorter query — a model family name usually works better than a full repository name.</EmptyState>}
-
-      <div className="mt-4 space-y-2">
-        {results?.map((entry) => (
-          <RepoCard key={entry.id} entry={entry} open={openRepo === entry.id} onToggle={() => setOpenRepo(openRepo === entry.id ? null : entry.id)} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function RepoCard({ entry, open, onToggle }: { entry: CatalogEntry; open: boolean; onToggle: () => void }) {
-  const [repo, setRepo] = useState<CatalogRepo | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const system = useStudio((s) => s.system)
-  const models = useStudio((s) => s.models)
-  const toast = useStudio((s) => s.toast)
-  const setDownload = useStudio((s) => s.setDownload)
-
-  useEffect(() => {
-    if (!open || repo || loading) return
-    setLoading(true)
-    api
-      .repo(entry.id)
-      .then(setRepo)
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setLoading(false))
-  }, [open, repo, loading, entry.id])
-
-  const start = async (file: string, sha256: string | null, size: number | null) => {
-    try {
-      const progress = await api.startDownload({
-        repo: entry.id,
-        revision: repo?.revision ?? null,
-        file,
-        sha256,
-        size,
-        base_model: repo?.base_model ?? null,
-      })
-      setDownload(progress)
-      toast('info', `Downloading ${progress.model_id}`)
-    } catch (e) {
-      toast('error', (e as Error).message)
-    }
-  }
-
-  return (
-    <div className="card overflow-hidden">
-      <button type="button" className="flex w-full items-center gap-3 p-4 text-left" onClick={onToggle}>
-        <Icon name="chevron" className={`size-4 shrink-0 text-ink-400 transition-transform ${open ? 'rotate-90' : ''}`} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-medium">{entry.id}</span>
-            {entry.gated && <span className="badge bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">gated</span>}
-          </div>
-          <div className="mt-0.5 flex gap-3 text-[0.7rem] text-ink-500 dark:text-ink-400">
-            <span>{count(entry.downloads)} downloads</span>
-            <span>{count(entry.likes)} likes</span>
-            {entry.last_modified && <span>updated {new Date(entry.last_modified).toLocaleDateString()}</span>}
-          </div>
-        </div>
-      </button>
-
-      {open && (
-        <div className="border-t border-ink-200 dark:border-ink-800">
-          {loading && (
-            <div className="flex items-center gap-2 p-4 text-sm text-ink-500 dark:text-ink-400">
-              <Spinner className="size-4" /> Reading the repository…
-            </div>
-          )}
-          {error && <p className="p-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
-          {repo && repo.files.length === 0 && <p className="p-4 text-sm text-ink-500 dark:text-ink-400">No GGUF files in this repository.</p>}
-          {repo && repo.files.length > 0 && (
-            <table className="w-full text-sm">
-              <tbody>
-                {repo.files.map((file) => {
-                  const installed = models.some((m) => m.id === file.path.replace(/\.gguf$/i, '').split('/').pop())
-                  const fit = estimateFit(file.size, system?.hardware)
-                  return (
-                    <tr key={file.path} className="border-t border-ink-100 first:border-t-0 dark:border-ink-800">
-                      <td className="px-4 py-2.5">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <QuantBadge quantization={file.quantization} />
-                          <span className="mono truncate text-xs">{file.path}</span>
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[0.7rem] text-ink-500 dark:text-ink-400">
-                          <span>{bytes(file.size)}</span>
-                          {fit && <span className={`badge ${fit.tone}`}>{fit.label}</span>}
-                          {file.sha256 && <span className="mono">sha256 {file.sha256.slice(0, 10)}…</span>}
-                        </div>
-                      </td>
-                      <td className="w-32 px-4 py-2.5 text-right">
-                        {installed ? (
-                          <span className="text-[0.7rem] text-ink-500 dark:text-ink-400">installed</span>
-                        ) : (
-                          <button type="button" className="btn-outline" onClick={() => void start(file.path, file.sha256, file.size)}>
-                            <Icon name="download" className="size-3.5" />
-                            Download
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          )}
-          {repo?.revision && (
-            <p className="border-t border-ink-100 px-4 py-2 text-[0.7rem] text-ink-500 dark:border-ink-800 dark:text-ink-400">
-              Downloads are pinned to revision <span className="mono">{repo.revision.slice(0, 12)}</span>, verified against the digest
-              the repository publishes, and recorded with the model.
-            </p>
-          )}
-        </div>
-      )}
     </div>
   )
 }

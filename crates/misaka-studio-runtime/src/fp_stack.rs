@@ -124,7 +124,10 @@ pub fn identity_command(settings: &NodeSettings, p: &StackPaths) -> Result<Vec<S
 pub type GatewayCommand = (Vec<String>, Vec<(String, String)>);
 
 pub fn gateway_command(settings: &NodeSettings, p: &StackPaths) -> Result<GatewayCommand> {
-    let artifact = need(&p.artifact, "the class artifact is missing — download qwen25-1.5b-a16-8k.palwart (Models → Discover)")?;
+    let artifact = need(
+        &p.artifact,
+        "the class artifact is missing — download qwen25-1.5b-a16-8k.palwart (Models → Model Search → Mining classes)",
+    )?;
     let tokenizer = need(&p.tokenizer, "the class tokenizer is missing — it downloads beside the artifact")?;
     let rpc = need(&p.rpc, "this network publishes no public wRPC — set node.misaka_rpc")?;
     let provider = need(&p.evidence_provider, "this network publishes no evidence provider — set node.free_prompt.evidence_provider")?;
@@ -204,7 +207,10 @@ pub async fn preflight(settings: &NodeSettings, data_dir: &Path, default_artifac
     let tokenizer_present = p.tokenizer.as_ref().is_some_and(|t| t.is_file());
     let key_present = p.key.as_ref().is_some_and(|k| k.is_file());
     if !artifact_present {
-        problems.push(format!("the {} artifact is not in the models directory (Models → Discover)", default_class().name));
+        problems.push(format!(
+            "the {} artifact is not in the models directory (Models → Model Search → Mining classes)",
+            default_class().name
+        ));
     }
     if !tokenizer_present {
         problems.push("the class tokenizer is not beside the artifact".into());
@@ -514,7 +520,7 @@ mod tests {
         assert!(rail_command(&s, &p(&s)).unwrap_err().to_string().contains("key gen"));
         let s = ready();
         let none = paths(&s, Path::new("/data"), None);
-        assert!(gateway_command(&s, &none).unwrap_err().to_string().contains("Models → Discover"));
+        assert!(gateway_command(&s, &none).unwrap_err().to_string().contains("Mining classes"));
     }
 
     #[test]

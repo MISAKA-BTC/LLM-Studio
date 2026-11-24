@@ -11,13 +11,18 @@ import { isMac, matches } from '../../lib/keys'
 import { useUi } from '../../store/ui'
 import { hasOpenLayer } from '../ui'
 import { focusComposer, goTo, isBusy, newSession, newThreadHere, stopGenerating, switchAppMode, toggleSidePanel } from './actions'
-import { SHORTCUTS, VIEW_ORDER, VIEW_SHORTCUTS } from './shortcuts'
+import { SHORTCUTS, VIEW_ORDER, VIEW_SHORTCUTS, inDesktopShell } from './shortcuts'
+import { closeTab, cycleTab, useWorkbench } from './workbenchState'
 
 type Binding = { keys: string[]; run: () => void }
 
 const BINDINGS: Binding[] = [
+  { keys: [SHORTCUTS.quickOpen], run: () => useUi.getState().setQuickOpen(!useUi.getState().quickOpen) },
+  { keys: [SHORTCUTS.nextTab], run: () => cycleTab(1) },
+  { keys: [SHORTCUTS.previousTab], run: () => cycleTab(-1) },
+  ...(inDesktopShell ? [{ keys: [SHORTCUTS.closeTab], run: () => closeTab(useWorkbench.getState().activeKey) }] : []),
   {
-    keys: [SHORTCUTS.palette],
+    keys: [SHORTCUTS.palette, SHORTCUTS.paletteEditor],
     run: () => {
       const ui = useUi.getState()
       if (ui.paletteOpen) ui.setPaletteOpen(false)
@@ -32,6 +37,7 @@ const BINDINGS: Binding[] = [
     run: () => {
       const ui = useUi.getState()
       if (ui.paletteOpen) ui.setPaletteOpen(false)
+      if (ui.quickOpen) ui.setQuickOpen(false)
       ui.setShortcutsOpen(!ui.shortcutsOpen)
     },
   },

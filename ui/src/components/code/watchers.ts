@@ -13,6 +13,7 @@ import { useStudio } from '../../store/studio'
 import { useUi } from '../../store/ui'
 import { useCodeUi } from './codeStore'
 import { scheduleGitRefresh } from './gitStore'
+import { fileCache } from './fileCache'
 
 export function useCodeWatchers(conversation: Conversation | null): void {
   const agent = conversation?.mode === 'agent'
@@ -40,7 +41,10 @@ export function useCodeWatchers(conversation: Conversation | null): void {
         const stepped = !ended && after.step !== before.step
         if (!ended && !stepped) return
         const thread = useStudio.getState().conversations.find((c) => c.id === before.conversationId)
-        if (thread?.workspace) scheduleGitRefresh(thread.workspace, ended ? 300 : 800)
+        if (thread?.workspace) {
+          fileCache.invalidate(thread.workspace)
+          scheduleGitRefresh(thread.workspace, ended ? 300 : 800)
+        }
       }),
     [],
   )
@@ -48,7 +52,10 @@ export function useCodeWatchers(conversation: Conversation | null): void {
   // Back from an editor or a terminal elsewhere: the tree may have changed under the window.
   useEffect(() => {
     const refresh = () => {
-      if (rootRef.current) scheduleGitRefresh(rootRef.current, 250)
+      if (rootRef.current) {
+        fileCache.invalidate(rootRef.current)
+        scheduleGitRefresh(rootRef.current, 250)
+      }
     }
     const onVisibility = () => {
       if (document.visibilityState === 'visible') refresh()
@@ -67,6 +74,7 @@ export function useCodeWatchers(conversation: Conversation | null): void {
     const previous = seen.current
     seen.current = { id: conversation?.id, changes }
     if (!root || previous.id !== conversation?.id || previous.changes === changes) return
+    fileCache.invalidate(root)
     scheduleGitRefresh(root, 800)
   }, [conversation?.id, changes, root])
 }

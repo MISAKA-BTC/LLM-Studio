@@ -5,11 +5,12 @@
 // wRPC. Every command is shown before it runs. The one decision the Studio never makes for the user is signing on a
 // public node's word: the rail's signing gate refuses UNVERIFIED_REMOTE until the user accepts it here.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import type { FreePromptStackSettings, PromptStackPreflight, PromptStackView, Settings } from '../lib/types'
+import type { FreePromptStackSettings, PromptStackPreflight, Settings } from '../lib/types'
 import { useStudio } from '../store/studio'
 import { CopyButton, Field, Spinner, Toggle } from './common'
+import { acceptPromptStack, refreshPromptStack as refresh, usePromptStack, usePromptStackPolling } from './shell/mining'
 
 const DEFAULTS: FreePromptStackSettings = {
   gateway_path: null,
@@ -28,28 +29,25 @@ export function PromptStackPanel({ settings, save }: { settings: Settings; save:
   const saved = { ...DEFAULTS, ...(settings.node.free_prompt ?? {}) }
   const savedKey = JSON.stringify(saved)
   const [draft, setDraft] = useState<FreePromptStackSettings>(saved)
-  const [view, setView] = useState<PromptStackView | null>(null)
+  const view = usePromptStack((s) => s.stack)
+  const pollError = usePromptStack((s) => s.error)
+  usePromptStackPolling()
   const [preflight, setPreflight] = useState<PromptStackPreflight | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [actionError, setError] = useState<string | null>(null)
+  const error = actionError ?? pollError
   const [showAdvanced, setShowAdvanced] = useState(false)
-  useEffect(() => setDraft(JSON.parse(savedKey)), [savedKey])
+  const appliedSavedKey = useRef(savedKey)
+  useEffect(() => {
+    // Activity reconnects effects when this view returns; only a changed saved value replaces
+    // a draft, so moving to another view and back does not discard unfinished edits.
+    if (appliedSavedKey.current === savedKey) return
+    appliedSavedKey.current = savedKey
+    setDraft(JSON.parse(savedKey))
+  }, [savedKey])
   const dirty = JSON.stringify(draft) !== savedKey
   const set = <K extends keyof FreePromptStackSettings>(key: K, value: FreePromptStackSettings[K]) => setDraft({ ...draft, [key]: value })
   const text = (value: string) => (value.trim() === '' ? null : value.trim())
-
-  const refresh = useCallback(async () => {
-    try {
-      setView(await api.promptStack())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }, [])
-  useEffect(() => {
-    void refresh()
-    const id = window.setInterval(refresh, 5000)
-    return () => window.clearInterval(id)
-  }, [refresh])
 
   const run = async (label: string, f: () => Promise<void>) => {
     setBusy(label)
@@ -150,7 +148,7 @@ export function PromptStackPanel({ settings, save }: { settings: Settings; save:
             className="btn-primary"
             disabled={dirty || busy !== null || planned === null || !saved.accept_unverified}
             title={dirty ? 'Save first' : (plannedError ?? (!saved.accept_unverified ? 'Accept signing on a public node first' : undefined))}
-            onClick={() => run('start', async () => setView(await api.startPromptStack()))}
+            onClick={() => run('start', async () => { acceptPromptStack(await api.startPromptStack()); await refresh() })}
           >
             {busy === 'start' ? <Spinner /> : 'Start prompt mining'}
           </button>

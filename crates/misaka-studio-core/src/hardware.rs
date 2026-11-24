@@ -97,8 +97,11 @@ impl HardwareSnapshot {
     /// Probe the machine. Runs vendor tools, so call it at startup and on request — not in a
     /// render loop.
     pub fn probe() -> Self {
-        let mut sys = sysinfo::System::new_all();
-        sys.refresh_all();
+        // The hardware snapshot needs CPU and memory facts, not every running process.
+        // new_all() already refreshes everything; refreshing it again doubled that startup work.
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
 
         let cpu_name = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_else(|| "unknown CPU".into());
         let total_memory = sys.total_memory();
@@ -176,7 +179,7 @@ pub const GPU_POLL_INTERVAL: Duration = Duration::from_millis(500);
 impl HardwareMonitor {
     pub fn new(snapshot: &HardwareSnapshot) -> Self {
         let mut system = sysinfo::System::new();
-        system.refresh_cpu_all();
+        system.refresh_cpu_usage();
         system.refresh_memory();
         HardwareMonitor {
             system,
@@ -193,9 +196,13 @@ impl HardwareMonitor {
     /// interval supplies that separation, and the first sample after construction is therefore
     /// the only inaccurate one.
     pub fn sample(&mut self) -> HardwareSample {
-        self.system.refresh_cpu_all();
+        // No frequency, executable path or disk-I/O counters are consumed by HardwareSample.
+        self.system.refresh_cpu_usage();
         self.system.refresh_memory();
-        self.system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[self.pid]));
+        self.system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[self.pid]),
+            sysinfo::ProcessRefreshKind::new().with_cpu().with_memory(),
+        );
 
         let cpu_percent = self.system.global_cpu_usage();
         let (process_cpu_percent, process_memory) =

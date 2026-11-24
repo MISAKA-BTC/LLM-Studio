@@ -19,10 +19,11 @@ import { draftKey, useComposer } from '../chat/composerStore'
 import { Icon, Spinner } from '../common'
 import { useTerminalHistory } from './codeStore'
 import { NeedsRuntime, NoFolder, consumeTabShown, useHomeDir } from './shared'
-import { clearTerminal, runCommand, stopCommand, useTerminal, type TerminalBlock } from './terminalStore'
+import { clearTerminal, runCommand, setTerminalDraft, stopCommand, useTerminal, useTerminalDraft, type TerminalBlock } from './terminalStore'
 
 /** Closer to the bottom than this counts as following the output. */
 const FOLLOW_SLACK_PX = 40
+const positions = new Map<string, { top: number; follow: boolean }>()
 
 /** A prompt short enough for the input row: the folder, or the last two directories within it. */
 function shortPrompt(folder: string, cwd: string): string {
@@ -169,19 +170,32 @@ function Terminal({ root, conversationId }: { root: string; conversationId: stri
   const home = useHomeDir()
   const info = useWorkspaceInfo(root)
   const folder = info?.status === 'ok' ? info.info.name : folderName(root)
-  const [input, setInput] = useState('')
+  const input = useTerminalDraft(root)
+  const setInput = (text: string) => setTerminalDraft(root, text)
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const typed = useRef('')
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
+  const previousRoot = useRef(root)
   const running = session.running !== null
   const runningLocal = running && session.blocks.find((b) => b.id === session.running)?.local === true
 
   useEffect(() => {
-    follow.current = true
-    setInput('')
+    if (previousRoot.current === root) return
+    previousRoot.current = root
     setHistoryIndex(null)
+    typed.current = ''
+  }, [root])
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current
+    const saved = positions.get(root)
+    follow.current = saved?.follow ?? true
+    if (element && saved) element.scrollTop = saved.top
+    return () => {
+      if (element) positions.set(root, { top: element.scrollTop, follow: follow.current })
+    }
   }, [root])
 
   // Opened to type into — but a panel that was simply left on this tab, coming back with the window,
@@ -194,7 +208,7 @@ function Terminal({ root, conversationId }: { root: string; conversationId: stri
   useLayoutEffect(() => {
     const element = scrollRef.current
     if (element && follow.current) element.scrollTop = element.scrollHeight
-  }, [session.blocks])
+  }, [root, session.blocks])
 
   const onScroll = () => {
     const element = scrollRef.current

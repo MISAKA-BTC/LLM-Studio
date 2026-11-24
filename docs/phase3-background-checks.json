@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "verifiedAt": "2026-11-24T07:44:54.791152+00:00",
+  "environment": {
+    "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+    "platform": "Linux",
+    "architecture": "x86_64",
+    "profile": "test; unoptimized + debuginfo"
+  },
+  "verification": {
+    "passed": 34,
+    "failed": 0,
+    "groups": {
+      "metrics": 7,
+      "store": 14,
+      "catalog": 9,
+      "management_strata": 1,
+      "core_hardware": 3
+    },
+    "newRegressionTests": 15,
+    "logSha256": "e8fc07822d0e8444925b2efdbf343d572dc742dc372ec5398ee6305e3a8df249"
+  },
+  "methodology": {
+    "measure": "Actual current Rust implementations; operation counts asserted by native tests. Metrics inject a counted HardwareSample producer. Model tests create real minimal GGUF and model-directory fixtures. Catalog tests use real reqwest HTTP requests to an in-process loopback axum server.",
+    "scope": "Counts describe these synthetic workloads, not wall-clock responsiveness, production GPU command duration, browser latency or battery life. No before/after native UI latency claim is made.",
+    "baseline": "The archived phase 2 source was inspected for the uncached call paths. These new counted workloads were run against phase 3; baseline counts below are characterized from source, not reported as a separately instrumented benchmark."
+  },
+  "workloads": {
+    "metricsSnapshotBurst": {
+      "concurrentRequests": 100,
+      "hardwareSampleCalls": 1,
+      "generationActiveAfterCachedHardwareUpdate": 1,
+      "hardwareSampleCallsAfterForcedTtlExpiry": 2,
+      "test": "metrics::tests::concurrent_snapshot_requests_share_one_hardware_probe_but_read_live_generation_stats"
+    },
+    "queuedModelRefreshBurst": {
+      "queuedRequestsBeforeScan": 100,
+      "filesystemPasses": 1,
+      "test": "store::tests::a_burst_of_refresh_requests_shares_one_filesystem_pass"
+    },
+    "modelChangesDuringScan": {
+      "activePass": 1,
+      "additionalRequestsDuringActivePass": 100,
+      "trailingPasses": 1,
+      "totalPasses": 2,
+      "newlyAddedFileVisibleToLaterCallers": true,
+      "test": "store::tests::changes_during_an_active_scan_get_one_trailing_pass"
+    },
+    "modelHeaders": {
+      "ggufFiles": 1000,
+      "initialHeaderInspections": 1000,
+      "unchangedRescanHeaderInspections": 0,
+      "unchangedRescanReusedHeaders": 1000,
+      "oneChangedFileHeaderInspections": 1,
+      "oneChangedSidecarHeaderInspections": 1,
+      "modelsAndHeaderCacheEntriesAfterOneExternalDelete": 999,
+      "test": "store::tests::thousand_model_rescans_read_only_changed_headers_and_track_sidecars_and_deletions"
+    },
+    "catalogRepositoryBurst": {
+      "concurrentRequests": 100,
+      "actualHttpRequests": 2,
+      "httpPaths": [
+        "org/model/revision/main",
+        "org/model/tree/immutable-commit"
+      ],
+      "test": "catalog::tests::simultaneous_repo_http_calls_share_two_requests_and_pin_the_tree_revision"
+    },
+    "catalogRepeatedSearch": {
+      "sequentialIdenticalRequests": 10,
+      "actualHttpRequests": 1,
+      "normalizedLimitUsesDistinctCacheKey": true,
+      "newCredentialInstanceUsesFreshHttpRequest": true,
+      "test": "catalog::tests::actual_search_http_is_reused_without_crossing_limits_or_credentials"
+    },
+    "catalogTemporaryFailure": {
+      "overlappingCalls": 100,
+      "fetchAttemptsForOverlap": 1,
+      "fetchAttemptsAfterOneLaterRetry": 2,
+      "laterRetrySucceeded": true,
+      "test": "catalog::tests::concurrent_requests_share_a_result_and_failures_do_not_become_a_negative_cache"
+    }
+  },
+  "safetyRegressions": [
+    "slow hardware work leaves the async executor responsive",
+    "cancelled metrics caller retains the single blocking-worker guard",
+    "no hardware sampling without an observer",
+    "root changes discard an older filesystem scan before publication",
+    "same-size edits and corrupt/repaired GGUF replacements invalidate the header cache",
+    "nested directory-model weights are rescanned",
+    "legacy sidecar hashing/deletion and MLX/diffusers separation remain covered",
+    "cancelled catalog initializer can be replaced by another waiter",
+    "catalog success TTL and bounded LRU evictions",
+    "Strata SSD-streaming verdict preserved"
+  ],
+  "implementationLimits": [
+    "Model refresh still walks the configured directories and stats model/sidecar files; only unchanged GGUF/PALW header and sidecar JSON parsing is skipped. The initial cold model scan remains.",
+    "MLX and diffusers directories are deliberately rescanned because their own directory mtime does not describe nested weight edits. The cache is in memory and follows the existing root/depth/filter semantics.",
+    "Metrics hardware snapshot TTL is 500 ms; generation atomics are read for every response. The existing GPU-specific 500 ms polling cache remains. 100-to-1 refers to complete HardwareMonitor sample calls, not a claim of 100 nvidia-smi subprocesses in the baseline.",
+    "Catalog successful searches are cached for 30 seconds with 64 entries; repository results for 60 seconds with 32 entries. A new endpoint/token Catalog instance has a fresh cache. Errors are shared only while callers overlap, not negatively cached.",
+    "Native checks ran on Linux. Real desktop/WebView paint and interaction latency were not measured."
+  ],
+  "baselineSourceCharacteristics": {
+    "hardwareStartup": "System::new_all followed by refresh_all refreshes every process twice although HardwareSnapshot only consumes CPU and memory facts.",
+    "metrics": "Each MetricsHub.sample called HardwareMonitor.sample synchronously inside the async task; only the nested GPU probes had a TTL.",
+    "modelStore": "Each refresh starts its own spawn_blocking full scan, rereads every model header and can publish after a roots change; these paths have no shared request generation or metadata cache.",
+    "catalog": "The HTTP client is already shared by AppState. Search and repository requests had no response or in-flight cache. The tree used a branch name even after metadata returned an immutable commit."
+  },
+  "referenceCodeRead": [
+    {
+      "file": "src/vs/base/common/async.ts",
+      "symbols": [
+        "Throttler.queue",
+        "ThrottlerByKey.queue"
+      ],
+      "application": "One active task with one coalesced later task; per-key independent work."
+    },
+    {
+      "file": "src/vs/platform/files/node/watcher/baseWatcher.ts",
+      "symbols": [
+        "updateWatchers",
+        "watch",
+        "suspendWatchRequest"
+      ],
+      "application": "Coalesce watcher updates, release obsolete tracked requests, and reuse shared observation."
+    },
+    {
+      "file": "src/vs/platform/files/node/watcher/parcel/parcelWatcher.ts",
+      "symbols": [
+        "throttledFileChangesEmitter",
+        "doWatch"
+      ],
+      "application": "Bound background work and keep unchanged watchers instead of recreating them."
+    }
+  ],
+  "sourceSha256": {
+    "crates/misaka-studio-core/src/hardware.rs": {
+      "phase2": "d733ebc9033cf10bdfc19e1c3a2712d975e034b0bea0b884792dcdc678ad9f22",
+      "phase3": "21567fcd063629e6556f07ed13bfb035bc2eaea4d33eed0797a80799d4f07f3e"
+    },
+    "crates/misaka-studio-runtime/src/metrics.rs": {
+      "phase2": "378635a55d5009cee434ed74884786fa2a0b5e781b20f9fa72f92900d91634ce",
+      "phase3": "d06de0310209068f74741041d1a31377100190f4211f3e7abfac1f9a54d5a304"
+    },
+    "crates/misaka-studio-runtime/src/store.rs": {
+      "phase2": "3af7291d088ebd9d506388fc34865ee663366c89bd5cce9da344c134a2f11283",
+      "phase3": "9544d9b2f0073803b70a18e1f6004ab7774d7da8473f36fe48ae97fdf6820474"
+    },
+    "crates/misaka-studio-runtime/src/catalog.rs": {
+      "phase2": "1ad60b74b61bd829baa257322006b0f71648a899926e6a58e24e22201a42eeed",
+      "phase3": "8c4bb3ed53e0897f7a6efa7f97c11f977f96cc85c7a72c0e72d9bc7787730a0b"
+    },
+    "crates/misaka-studio-runtime/src/api/management.rs": {
+      "phase2": "ba0bc52e99ec0ab31ce0855a4e106893e26b1ee2ac77f4979eab982c006b5d16",
+      "phase3": "6c0161a15822cadae0bdc5e3c2f471f953e96c37b545714fc3b1b6e15966ff5d"
+    }
+  },
+  "reproductionCommands": [
+    "cargo test --locked -p misaka-studio-runtime --lib metrics::tests::",
+    "cargo test --locked -p misaka-studio-runtime --lib store::tests::",
+    "cargo test --locked -p misaka-studio-runtime --lib catalog::tests::",
+    "cargo test --locked -p misaka-studio-runtime --lib api::management::strata_tests::",
+    "cargo test --locked -p misaka-studio-core --lib hardware::tests::"
+  ],
+  "subsequentCompatibilityChange": {
+    "file": "crates/misaka-studio-runtime/src/metrics.rs",
+    "sha256": "a916eb916da714113a4d15d9ff955c2efc034534f80d03eb855be858bace7ef9",
+    "change": "Replace newly deprecated fetch_update with an equivalent compare_exchange_weak/saturating_sub loop; preserve Relaxed ordering and the existing underflow regression test.",
+    "reason": "Keep the Rust 1.88 minimum version while allowing Rust 1.100 clippy -D warnings.",
+    "validation": "rustfmt --check passed. Root owns the final full native test/clippy gate after this small compatibility change. sourceSha256.phase3 records the earlier targeted-test source."
+  }
+}

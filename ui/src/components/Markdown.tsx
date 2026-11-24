@@ -20,20 +20,21 @@ import { useStudio } from '../store/studio'
 // code block was unmounted and rebuilt per token, and a wrap toggle or a "Copied" confirmation
 // could not survive the next one.
 //
-// Highlighting uses `rehype-highlight`'s default set — highlight.js's `common` grammars, about
-// thirty languages. Naming a subset explicitly does not shrink it: the option registers languages
-// *in addition to* that set, so the honest way to trim the bundle would be a custom lowlight
-// instance, and thirty grammars is not yet worth one.
+// Parsing runs in a coalescing worker, including math normalisation and optional KaTeX. Stable
+// top-level blocks are reused on the UI thread; only a changing block needs new React elements.
+// Code colours are a separate shared worker job after streaming ends, never a token-time parse.
 
-import { isValidElement, memo, useEffect, useState, type ReactNode } from 'react'
-import ReactMarkdown, { type Components, type Options } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
-import rehypeHighlight from 'rehype-highlight'
-import rehypeKatex from 'rehype-katex'
-import 'katex/dist/katex.min.css'
-import { normalizeMathDelimiters } from '../lib/math'
+import { createContext, isValidElement, memo, startTransition, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
+import type { Components } from 'react-markdown'
+import { toJsxRuntime } from 'hast-util-to-jsx-runtime'
+import { cachedHighlight, highlightFile } from './code/highlight'
+import { cachedMarkdown, releaseMarkdown, requestMarkdown } from './markdown/client'
+import type { MarkdownBlock, MarkdownDocument } from './markdown/types'
 import { Icon } from './common'
+
+const Streaming = createContext(false)
+const CODE_HIGHLIGHT_LIMIT = 50_000
 
 function textOf(node: ReactNode): string {
   if (node === null || node === undefined || typeof node === 'boolean') return ''
@@ -80,9 +81,25 @@ function CopyCode({ text }: { text: string }) {
   )
 }
 
-function CodeBlock({ children }: { children?: ReactNode }) {
+const CodeBlock = memo(function CodeBlock({ children }: { children?: ReactNode }) {
   const [wrap, setWrap] = useState(false)
   const language = languageOf(children)
+  const text = textOf(children)
+  const streaming = useContext(Streaming)
+  const [colours, setColours] = useState<{ text: string; language: string | null; html: string | null } | null>(null)
+  const canHighlight = !streaming && text.length <= CODE_HIGHLIGHT_LIMIT
+  const html = canHighlight
+    ? (colours?.text === text && colours.language === language ? colours.html : cachedHighlight(text, language ?? '') ?? null)
+    : null
+
+  useEffect(() => {
+    if (!canHighlight) return
+    let live = true
+    void highlightFile(text, language ?? '').then((html) => {
+      if (live) startTransition(() => setColours({ text, language, html }))
+    })
+    return () => { live = false }
+  }, [text, language, canHighlight])
   return (
     <div className="overflow-hidden rounded-lg border border-ink-800 bg-ink-900 dark:border-ink-800 dark:bg-black/40">
       <div className="flex h-8 items-center gap-0.5 border-b border-white/10 pl-3 pr-1 text-[0.7rem] text-ink-400">
@@ -97,12 +114,14 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         >
           <Icon name="wrap" className="size-3.5" />
         </button>
-        <CopyCode text={textOf(children)} />
+        <CopyCode text={text} />
       </div>
-      <pre className={`rounded-none bg-transparent dark:bg-transparent ${wrap ? 'whitespace-pre-wrap break-words' : ''}`}>{children}</pre>
+      <pre className={`rounded-none bg-transparent dark:bg-transparent ${wrap ? 'whitespace-pre-wrap break-words' : ''}`}>
+        {html === null ? children : <code className={`hljs${language ? ` language-${language}` : ''}`} dangerouslySetInnerHTML={{ __html: html }} />}
+      </pre>
     </div>
   )
-}
+}, (before, after) => languageOf(before.children) === languageOf(after.children) && textOf(before.children) === textOf(after.children))
 
 const COMPONENTS: Components = {
   img({ src, alt }) {
@@ -139,26 +158,72 @@ const COMPONENTS: Components = {
   },
 }
 
-// The same plugin lists as always — streaming leaves out math, see below — built once.
-const REMARK_STREAMING: Options['remarkPlugins'] = [remarkGfm]
-const REMARK: Options['remarkPlugins'] = [remarkGfm, remarkMath]
-const REHYPE_STREAMING: Options['rehypePlugins'] = [[rehypeHighlight, { detect: true, ignoreMissing: true }]]
-const REHYPE: Options['rehypePlugins'] = [[rehypeHighlight, { detect: true, ignoreMissing: true }], rehypeKatex]
+const RenderBlock = memo(function RenderBlock({ block }: { block: MarkdownBlock }) {
+  return useMemo(() => toJsxRuntime(block.tree, { Fragment, jsx, jsxs, components: COMPONENTS, ignoreInvalidStyle: true, passKeys: true, passNode: true }), [block])
+})
+
+let mathStyles: Promise<unknown> | null = null
+type Snapshot = { source: string; streaming: boolean; document: MarkdownDocument }
 
 export const Markdown = memo(function Markdown({ children, streaming = false }: { children: string; streaming?: boolean }) {
-  // An incomplete reply has unmatched delimiters by definition.  Rendering it as ordinary
-  // Markdown until the stream commits avoids repeatedly rebuilding KaTeX's tree for every token
-  // and makes the in-progress source legible.
-  const markdown = streaming ? children : normalizeMathDelimiters(children)
+  const owner = useId()
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(() => {
+    const document = !streaming && cachedMarkdown(children)
+    return document ? { source: children, streaming: false, document } : null
+  })
+  const [plainSource, setPlainSource] = useState<{ source: string; streaming: boolean } | null>(null)
+  const current = useRef({ children, streaming })
+  current.current = { children, streaming }
+  const life = useRef(0)
+
+  useEffect(() => {
+    life.current++
+    return () => {
+      life.current++
+      releaseMarkdown(owner)
+    }
+  }, [owner])
+
+  useEffect(() => {
+    const generation = life.current
+    void requestMarkdown(owner, children, streaming).then((document) => {
+      // A completed parse of a still-valid prefix is useful while another parse catches up. It
+      // must never enter a different message, a replaced answer, or a hidden/unmounted view.
+      if (generation !== life.current || !current.current.children.startsWith(children)) return
+      if (!document) {
+        if (current.current.children !== children || current.current.streaming !== streaming) return
+        // A failed/unsupported worker can leave a valid old prefix on screen. Drop that prefix
+        // when the current request cannot be formatted, otherwise the rest of the answer vanishes.
+        startTransition(() => {
+          setSnapshot(null)
+          setPlainSource({ source: children, streaming })
+        })
+        return
+      }
+      startTransition(() => {
+        setPlainSource(null)
+        setSnapshot((previous) => {
+          if (previous && current.current.children.startsWith(previous.source) &&
+            (previous.source.length > children.length || (previous.source === children && !previous.streaming && streaming))) return previous
+          return { source: children, streaming, document }
+        })
+      })
+    })
+  }, [owner, children, streaming])
+
+  const shown = snapshot && children.startsWith(snapshot.source) ? snapshot : null
+  useEffect(() => {
+    if (!shown?.document.math) return
+    mathStyles ??= import('katex/dist/katex.min.css').catch(() => { mathStyles = null })
+  }, [shown?.document.math])
+
   return (
-    <div className="prose-chat">
-      <ReactMarkdown
-        remarkPlugins={streaming ? REMARK_STREAMING : REMARK}
-        rehypePlugins={streaming ? REHYPE_STREAMING : REHYPE}
-        components={COMPONENTS}
-      >
-        {markdown}
-      </ReactMarkdown>
+    <div className="prose-chat" data-markdown-pending={(plainSource?.source === children && plainSource.streaming === streaming) || (shown?.source === children && shown.streaming === streaming) ? undefined : true}>
+      <Streaming value={streaming}>
+        {shown
+          ? shown.document.blocks.map((block, index) => <RenderBlock key={index} block={block} />)
+          : <p className="whitespace-pre-wrap break-words">{children}</p>}
+      </Streaming>
     </div>
   )
 })

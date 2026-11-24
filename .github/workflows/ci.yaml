@@ -88,6 +88,12 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Workbench state and lifecycle regression tests
+        run: npm run test:workbench
+
+      - name: Production Markdown worker regression tests
+        run: npm run test:markdown-worker
+
   desktop:
     name: Desktop shell
     runs-on: ubuntu-latest

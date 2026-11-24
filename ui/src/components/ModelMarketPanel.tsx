@@ -11,8 +11,9 @@
 // balance and the shortfall are read off the chain before the seed control exists, and the
 // irreversibility is written next to the control rather than behind it.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '../lib/api'
+import { useVisiblePolling } from './shell/useVisiblePolling'
 import type { SeedOutcome, SeedReadiness } from '../lib/types'
 import { Section, Spinner } from './common'
 
@@ -29,19 +30,7 @@ export function ModelMarketPanel() {
   const [error, setError] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<SeedOutcome | null>(null)
 
-  const refresh = useCallback(async () => {
-    try {
-      setSeed(await api.seedReadiness())
-    } catch {
-      // the seed half shows its spinner until the chain answers
-    }
-  }, [])
-
-  useEffect(() => {
-    void refresh()
-    const timer = setInterval(() => void refresh(), 20_000)
-    return () => clearInterval(timer)
-  }, [refresh])
+  const refresh = useVisiblePolling(api.seedReadiness, setSeed, 20_000)
 
   // Two presses, and the first one is not a formality: the dry run comes back from the chain's own
   // code path with the amount it would lock, which is the last chance to read the number before it

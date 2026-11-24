@@ -6,8 +6,9 @@
 // read from two nodes) and the consent to mine on a view that is not fully verified, which on testnet-12 is the best a
 // node-free miner can reach while the fork-choice fence is dormant.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { useVisiblePolling } from './shell/useVisiblePolling'
 import { shortHash } from '../lib/format'
 import type { CheckpointSuggestion, RemoteMinerPreflight, RemoteMinerSettings, RemoteMinerView, Settings } from '../lib/types'
 import { useStudio } from '../store/studio'
@@ -44,27 +45,23 @@ export function RemoteMinerPanel({ settings, save }: { settings: Settings; save:
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const savedKey = JSON.stringify(saved)
-  useEffect(() => setDraft(JSON.parse(savedKey)), [savedKey])
+  const appliedSavedKey = useRef(savedKey)
+  useEffect(() => {
+    // Reconnecting a kept view's effects is not a settings change.
+    if (appliedSavedKey.current === savedKey) return
+    appliedSavedKey.current = savedKey
+    setDraft(JSON.parse(savedKey))
+  }, [savedKey])
   const dirty = JSON.stringify(draft) !== savedKey
 
   const set = <K extends keyof RemoteMinerSettings>(key: K, value: RemoteMinerSettings[K]) => setDraft({ ...draft, [key]: value })
   const text = (value: string) => (value.trim() === '' ? null : value.trim())
 
-  const refresh = useCallback(async () => {
-    try {
-      const v = await api.remoteMiner()
-      setView(v)
-      if (v.running || v.command_line) setLog(await api.remoteMinerLog(80))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }, [])
-
-  useEffect(() => {
-    void refresh()
-    const id = window.setInterval(refresh, 5000)
-    return () => window.clearInterval(id)
-  }, [refresh])
+  const readFailed = useCallback((error: unknown) => setError(error instanceof Error ? error.message : String(error)), [])
+  const refresh = useVisiblePolling(api.remoteMiner, setView, 5_000, readFailed)
+  // Status (and Stop) must remain usable even when only the log endpoint is slow or offline.
+  const readLog = useCallback((signal: AbortSignal) => api.remoteMinerLog(80, signal), [])
+  useVisiblePolling(readLog, setLog, 5_000, readFailed, Boolean(view?.running || view?.command_line))
 
   const run = async (label: string, f: () => Promise<void>) => {
     setBusy(label)
@@ -121,7 +118,7 @@ export function RemoteMinerPanel({ settings, save }: { settings: Settings; save:
         </select>
       </Field>
       {draft.class && (
-        <Field label="Artifact" hint="qwen25-1.5b-a16-8k.palwart, the same container the public producer holds (Models → Discover).">
+        <Field label="Artifact" hint="qwen25-1.5b-a16-8k.palwart, the same container the public producer holds (Models → Model Search → Mining classes).">
           <input className="input mt-1" placeholder="/path/qwen25-1.5b-a16-8k.palwart" value={draft.artifact ?? ''} onChange={(e) => set('artifact', text(e.target.value))} />
         </Field>
       )}
@@ -204,6 +201,7 @@ export function RemoteMinerPanel({ settings, save }: { settings: Settings; save:
             onClick={() =>
               run('start', async () => {
                 setView(await api.startRemoteMiner())
+                await refresh()
               })
             }
           >

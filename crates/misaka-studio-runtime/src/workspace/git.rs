@@ -18,12 +18,14 @@
 //! git is asked about that directory only (`-- .`), and its repository-relative names are made
 //! root-relative here.
 
-use super::{ProcessGroup, Workspace, bad, detach, display_path, find_git, looks_binary, sniff};
+use super::{BINARY_SNIFF_BYTES, Cancellation, ProcessGroup, Workspace, bad, detach, display_path, find_git, looks_binary};
 use crate::{Error, Result};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -44,6 +46,11 @@ const COUNT_BUDGET_FILES: usize = 5000;
 const LISTING_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// git's stderr is only ever an error message; this much of it is kept.
 const STDERR_MAX_BYTES: usize = 64 * 1024;
+
+// Bound complete operations (including untracked-file I/O) as well as subprocesses. Waiting
+// requests do not start commands, and cancellation while waiting drops their queue position.
+static GIT_OPERATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static GIT_PROCESSES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 /// The empty tree in a SHA-1 repository — what everything is compared with before the first
 /// commit. Asked of git first, which knows whether the repository is SHA-256 instead.
@@ -133,6 +140,10 @@ pub struct GitStatus {
     /// Sums over `files`, a `null` counting as 0.
     pub added: u64,
     pub removed: u64,
+    /// Present and false for a cheap status-only request. Its zero totals/null file counts mean
+    /// "not measured", not "no line changed". Full responses retain their previous JSON shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counts_included: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -150,33 +161,61 @@ pub struct GitDiff {
 /// **What changed in the workspace**: the branch and its upstream, and every changed, new or
 /// conflicted file under the root with its line counts against HEAD.
 pub async fn status(workspace: &Workspace) -> Result<GitStatus> {
+    status_with_counts(workspace, true).await
+}
+
+/// Badge/background status can skip numstat and untracked-file content reads. An explicit
+/// Changes view (and the existing API default) still asks for complete line counts.
+pub async fn status_with_counts(workspace: &Workspace, include_counts: bool) -> Result<GitStatus> {
+    let cancellation = Cancellation::default();
+    let _cancel_on_drop = cancellation.cancel_on_drop();
+    let workspace = workspace.clone().with_cancellation(cancellation);
+    let permit = Arc::new(GIT_OPERATIONS.acquire().await.map_err(|_| Error::Cancelled)?);
     let root = workspace.root().to_path_buf();
     // A folder with no `.git` above it is answered without git, which need not even be installed.
     if !in_a_repository(&root).await {
-        return Ok(GitStatus::default());
+        return Ok(GitStatus { counts_included: (!include_counts).then_some(false), ..GitStatus::default() });
     }
-    let git = Git::find(&root)?;
-    let Some(listing) = git.listing().await? else { return Ok(GitStatus::default()) };
-    let base = git.base(listing.unborn).await;
-    let numstat = git.numstat(&base).await?;
-    let new_files: Vec<String> = listing
-        .entries
-        .iter()
-        .filter(|e| e.status == FileStatus::Untracked && !e.path.ends_with('/'))
-        .map(|e| e.path.clone())
-        .collect();
-    let counted = {
-        let root = root.clone();
-        tokio::task::spawn_blocking(move || count_new_files(&root, &new_files))
-            .await
-            .map_err(|e| Error::io("git status", std::io::Error::other(e.to_string())))?
+    let git = Git::find(&workspace)?;
+    let Some(listing) = git.listing(None).await? else {
+        return Ok(GitStatus { counts_included: (!include_counts).then_some(false), ..GitStatus::default() });
+    };
+    let (numstat, counted) = if include_counts {
+        let new_files: Vec<String> = listing
+            .entries
+            .iter()
+            .filter(|e| e.status == FileStatus::Untracked && !e.path.ends_with('/'))
+            .map(|e| e.path.clone())
+            .collect();
+        let workspace = workspace.clone();
+        let count_permit = permit.clone();
+        tokio::try_join!(
+            async {
+                let base = git.base(listing.unborn).await;
+                git.numstat(&base).await
+            },
+            async {
+                tokio::task::spawn_blocking(move || {
+                    // Hold the operation slot until this thread actually stops, even when its
+                    // awaiting HTTP future has already been dropped.
+                    let _permit = count_permit;
+                    count_new_files(&workspace, &new_files)
+                })
+                .await
+                .map_err(|e| Error::io("git status", std::io::Error::other(e.to_string())))?
+            }
+        )?
+    } else {
+        (Numstat::default(), HashMap::new())
     };
 
     let mut files: Vec<GitFile> = listing
         .entries
         .into_iter()
         .map(|entry| {
-            let (added, removed, binary) = if entry.status == FileStatus::Untracked {
+            let (added, removed, binary) = if !include_counts {
+                (None, None, false)
+            } else if entry.status == FileStatus::Untracked {
                 match counted.get(&entry.path) {
                     Some(&(Some(lines), _)) => (Some(lines), Some(0), false),
                     Some(&(None, binary)) => (None, None, binary),
@@ -212,6 +251,7 @@ pub async fn status(workspace: &Workspace) -> Result<GitStatus> {
         files,
         added,
         removed,
+        counts_included: (!include_counts).then_some(false),
     })
 }
 
@@ -223,6 +263,7 @@ pub async fn status(workspace: &Workspace) -> Result<GitStatus> {
 /// the tracked changes. A renamed file is diffed with its old name, so its patch is the rename and
 /// the edit — not a new file beside a deleted one.
 pub async fn diff(workspace: &Workspace, path: Option<&str>) -> Result<GitDiff> {
+    let _permit = GIT_OPERATIONS.acquire().await.map_err(|_| Error::Cancelled)?;
     let root = workspace.root().to_path_buf();
     let not_a_repository = || {
         bad(format!("{} is not in a git repository, so it has no diff — git status reports is_git: false for it", display_path(&root)))
@@ -230,10 +271,15 @@ pub async fn diff(workspace: &Workspace, path: Option<&str>) -> Result<GitDiff> 
     if !in_a_repository(&root).await {
         return Err(not_a_repository());
     }
-    let git = Git::find(&root)?;
-    let Some(listing) = git.listing().await? else { return Err(not_a_repository()) };
-
+    let git = Git::find(workspace)?;
     let target = path.map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty() && *p != ".");
+    let Some(mut listing) = git.listing(target).await? else { return Err(not_a_repository()) };
+    // A path-limited status avoids scanning unrelated untracked folders for the usual one-file
+    // preview. Git may split a rename crossing that boundary into A/D; only those cases need a
+    // whole-root listing to recover the original name and preserve the rename patch.
+    if target.is_some() && listing.entries.iter().any(|e| matches!(e.status, FileStatus::Added | FileStatus::Deleted)) {
+        listing = git.listing(None).await?.ok_or_else(not_a_repository)?;
+    }
     let covered = |p: &str| target.is_none_or(|t| p == t || p.strip_prefix(t).is_some_and(|rest| rest.starts_with('/')));
     let mut pathspecs = vec![target.unwrap_or(".").to_string()];
     let mut tracked = target.is_none();
@@ -408,17 +454,27 @@ impl Run {
 struct Git {
     binary: PathBuf,
     root: PathBuf,
+    #[cfg(test)]
+    io_stats: Arc<super::WorkspaceIoStats>,
 }
 
 impl Git {
-    fn find(root: &Path) -> Result<Git> {
-        Ok(Git { binary: git_binary().ok_or_else(not_installed)?, root: root.to_path_buf() })
+    fn find(workspace: &Workspace) -> Result<Git> {
+        Ok(Git {
+            binary: git_binary().ok_or_else(not_installed)?,
+            root: workspace.root().to_path_buf(),
+            #[cfg(test)]
+            io_stats: workspace.io_stats.clone(),
+        })
     }
 
     /// **Run `git <args>` in the root**: no shell, stdin closed, its own process group (so a
     /// timeout stops what it started too), and stdout read up to `max_stdout` — past it git is
     /// stopped and the run is `cut`.
     async fn run(&self, args: &[&str], max_stdout: usize) -> Result<Run> {
+        let _permit = GIT_PROCESSES.acquire().await.map_err(|_| Error::Cancelled)?;
+        #[cfg(test)]
+        self.io_stats.git_commands.lock().unwrap().push(args.iter().map(|arg| (*arg).to_owned()).collect());
         let mut cmd = tokio::process::Command::new(&self.binary);
         cmd.arg("-C").arg(&self.root);
         for setting in GIT_CONFIG {
@@ -462,14 +518,13 @@ impl Git {
 
     /// **`git status` of the root**, its paths made root-relative. `None` when the root is not in
     /// a work tree.
-    async fn listing(&self) -> Result<Option<Porcelain>> {
+    async fn listing(&self, path: Option<&str>) -> Result<Option<Porcelain>> {
         // Where the root is in the repository, and the status of that part of it — at once.
+        let listing_args =
+            ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--renames", "--", path.unwrap_or(".")];
         let (probe, listing) = tokio::join!(
             self.run(&["rev-parse", "--is-inside-work-tree", "--show-prefix"], 64 * 1024),
-            self.run(
-                &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--renames", "--", "."],
-                LISTING_MAX_BYTES
-            ),
+            self.run(&listing_args, LISTING_MAX_BYTES),
         );
         let probe = probe?;
         if !probe.ok() {
@@ -749,14 +804,17 @@ impl Numstat {
 /// **Each new file's line count and whether it is binary**, as `git diff --numstat` would count
 /// it as an addition — `None` for a binary file, one over [`COUNT_MAX_FILE_BYTES`], or one past
 /// the budget.
-fn count_new_files(root: &Path, paths: &[String]) -> HashMap<String, (Option<u64>, bool)> {
+fn count_new_files(workspace: &Workspace, paths: &[String]) -> Result<HashMap<String, (Option<u64>, bool)>> {
     let mut budget = COUNT_BUDGET_BYTES;
     paths
         .iter()
         .enumerate()
         .map(|(n, path)| {
-            let counted = if n < COUNT_BUDGET_FILES { count_lines(&root.join(path), &mut budget) } else { (None, false) };
-            (path.clone(), counted)
+            workspace.check_cancelled()?;
+            #[cfg(test)]
+            workspace.io_stats.git_count_visits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let counted = if n < COUNT_BUDGET_FILES { count_lines(&workspace.root().join(path), &mut budget) } else { (None, false) };
+            Ok((path.clone(), counted))
         })
         .collect()
 }
@@ -771,13 +829,32 @@ fn count_lines(path: &Path, budget: &mut u64) -> (Option<u64>, bool) {
         return (None, false);
     }
     if meta.len() > COUNT_MAX_FILE_BYTES || meta.len() > *budget {
-        // Too much to read for a count, but whether it is binary is still worth saying.
-        return (None, sniff(path).is_ok_and(|head| looks_binary(&head)));
+        // Header sniffing also spends the shared I/O budget; thousands of oversized files
+        // must not keep reading headers after the operation has exhausted it.
+        let allowed = (*budget).min(BINARY_SNIFF_BYTES as u64);
+        if allowed == 0 {
+            return (None, false);
+        }
+        let Ok(file) = std::fs::File::open(path) else { return (None, false) };
+        let mut head = Vec::new();
+        if file.take(allowed).read_to_end(&mut head).is_err() {
+            return (None, false);
+        }
+        *budget = budget.saturating_sub(head.len() as u64);
+        return (None, looks_binary(&head));
     }
-    let Ok(bytes) = std::fs::read(path) else { return (None, false) };
+    let Ok(file) = std::fs::File::open(path) else { return (None, false) };
+    let mut bytes = Vec::new();
+    let max_bytes = COUNT_MAX_FILE_BYTES.min(*budget);
+    if file.take(max_bytes + 1).read_to_end(&mut bytes).is_err() {
+        return (None, false);
+    }
     *budget = budget.saturating_sub(bytes.len() as u64);
     if looks_binary(&bytes) {
         return (None, true);
+    }
+    if bytes.len() as u64 > max_bytes {
+        return (None, false);
     }
     let newlines = bytes.iter().filter(|b| **b == b'\n').count() as u64;
     // A last line with no newline after it is still a line.
@@ -921,7 +998,8 @@ mod tests {
         big_binary.resize(COUNT_MAX_FILE_BYTES as usize + 1, b'x');
         put("big.bin", &big_binary);
         let names = ["lines.txt", "no-newline.txt", "empty.txt", "binary.dat", "big.txt", "big.bin", "missing.txt"];
-        let counted = count_new_files(dir.path(), &names.map(String::from));
+        let workspace = Workspace::open(dir.path().to_str().unwrap()).unwrap();
+        let counted = count_new_files(&workspace, &names.map(String::from)).unwrap();
         assert_eq!(counted["lines.txt"], (Some(3), false));
         assert_eq!(counted["no-newline.txt"], (Some(2), false));
         assert_eq!(counted["empty.txt"], (Some(0), false));

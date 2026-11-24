@@ -10,7 +10,9 @@ import type {
   WebResult,
   BackendInfo,
   CatalogEntry,
+  CatalogFormat,
   CatalogRepo,
+  CatalogSort,
   DownloadProgress,
   ImageBackendInfo,
   ImageGenerateRequest,
@@ -99,6 +101,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+function catalogRepoUrl(kind: 'repo' | 'readme', id: string, revision?: string): string {
+  const path = id.split('/').map(encodeURIComponent).join('/')
+  return `/api/v1/catalog/${kind}/${path}${revision ? '?' + new URLSearchParams({ revision }) : ''}`
+}
+
 export const api = {
   web: {
     browser: () => request<{ installed: boolean; path: string | null; managed: boolean }>('/api/v1/web/browser'),
@@ -139,23 +146,29 @@ export const api = {
   installEngine: (flavor: string, tag?: string | null) =>
     request<InstallStatus>('/api/v1/engines/install', { method: 'POST', body: JSON.stringify({ flavor, tag: tag ?? null }) }),
 
-  search: (q: string, limit = 24) => request<CatalogEntry[]>(`/api/v1/catalog/search?q=${encodeURIComponent(q)}&limit=${limit}`),
-  repo: (id: string) => request<CatalogRepo>(`/api/v1/catalog/repo/${id}`),
+  search: (q: string, format: 'all' | CatalogFormat, sort: CatalogSort, signal?: AbortSignal) =>
+    request<CatalogEntry[]>(`/api/v1/catalog/search?${new URLSearchParams({ q, format, sort, limit: '48' })}`, { signal }),
+  repo: (id: string, revision?: string, signal?: AbortSignal) =>
+    request<CatalogRepo>(catalogRepoUrl('repo', id, revision), { signal }),
+  catalogReadme: (id: string, revision?: string, signal?: AbortSignal) =>
+    request<string | null>(catalogRepoUrl('readme', id, revision), { signal }),
+  downloadVariant: (repo: string, revision: string, variant: string) =>
+    request<DownloadProgress>('/api/v1/catalog/download', { method: 'POST', body: JSON.stringify({ repo, revision, variant }) }),
 
   downloads: () => request<DownloadProgress[]>('/api/v1/downloads'),
   startDownload: (body: { repo: string; revision?: string | null; file: string; sha256?: string | null; size?: number | null; base_model?: string | null }) =>
     request<DownloadProgress>('/api/v1/downloads', { method: 'POST', body: JSON.stringify(body) }),
-  cancelDownload: (id: string) => request<{ cancelling: string }>(`/api/v1/downloads/${id}`, { method: 'DELETE' }),
+  cancelDownload: (id: string) => request<{ cancelling: string }>(`/api/v1/downloads/${id.split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE' }),
 
   settings: () => request<Settings>('/api/v1/settings'),
   saveSettings: (settings: Settings) => request<Settings>('/api/v1/settings', { method: 'PUT', body: JSON.stringify(settings) }),
 
-  network: () => request<NetworkOverview>('/api/v1/network'),
+  network: (signal?: AbortSignal) => request<NetworkOverview>('/api/v1/network', { signal }),
   producerKey: () => request<{ producer_key_path: string; next: string }>('/api/v1/network/producer-key', { method: 'POST' }),
 
   // ADR-0087/0090 — adding a model, and opening its market. Two separate acts on the chain, so
   // two separate calls here.
-  seedReadiness: () => request<SeedReadiness>('/api/v1/network/model-market/seed-readiness'),
+  seedReadiness: (signal?: AbortSignal) => request<SeedReadiness>('/api/v1/network/model-market/seed-readiness', { signal }),
   seedMarket: (lineId: string, msk: string, confirm: boolean) =>
     request<SeedOutcome>('/api/v1/network/model-market/seed', {
       method: 'POST',
@@ -168,7 +181,7 @@ export const api = {
       body: JSON.stringify({ prompt, max_tokens: maxTokens ?? null }),
     }),
   // The mining queue: prompts mined behind the chat, on this Studio's own gateway.
-  miningQueue: () => request<MiningQueueView>('/api/v1/network/mining-queue'),
+  miningQueue: (signal?: AbortSignal) => request<MiningQueueView>('/api/v1/network/mining-queue', { signal }),
   miningEnqueue: (prompt: string, conversationId: string | null, messageId: string | null) =>
     request<MiningJob>('/api/v1/network/mining-queue', {
       method: 'POST',
@@ -184,16 +197,16 @@ export const api = {
   publishedModels: () => request<PublishedPalwartView[]>('/api/v1/network/published'),
   downloadPublished: (name: string) =>
     request<DownloadProgress[]>(`/api/v1/network/published/${encodeURIComponent(name)}/download`, { method: 'POST' }),
-  promptStack: () => request<PromptStackView>('/api/v1/network/prompt-stack'),
+  promptStack: (signal?: AbortSignal) => request<PromptStackView>('/api/v1/network/prompt-stack', { signal }),
   promptStackPreflight: () => request<PromptStackPreflight>('/api/v1/network/prompt-stack/preflight'),
   startPromptStack: () => request<PromptStackView>('/api/v1/network/prompt-stack/start', { method: 'POST' }),
   stopPromptStack: () => request<{ stopped: boolean }>('/api/v1/network/prompt-stack/stop', { method: 'POST' }),
-  remoteMiner: () => request<RemoteMinerView>('/api/v1/network/remote-miner'),
+  remoteMiner: (signal?: AbortSignal) => request<RemoteMinerView>('/api/v1/network/remote-miner', { signal }),
   remoteMinerPreflight: () => request<RemoteMinerPreflight>('/api/v1/network/remote-miner/preflight'),
   remoteMinerCheckpoint: () => request<CheckpointSuggestion>('/api/v1/network/remote-miner/checkpoint'),
   startRemoteMiner: () => request<RemoteMinerView>('/api/v1/network/remote-miner/start', { method: 'POST' }),
   stopRemoteMiner: () => request<{ stopped: boolean }>('/api/v1/network/remote-miner/stop', { method: 'POST' }),
-  remoteMinerLog: (limit = 200) => request<string[]>(`/api/v1/network/remote-miner/log?limit=${limit}`),
+  remoteMinerLog: (limit = 200, signal?: AbortSignal) => request<string[]>(`/api/v1/network/remote-miner/log?limit=${limit}`, { signal }),
 
   records: (limit = 50) => request<InferenceRecord[]>(`/api/v1/records?limit=${limit}`),
 
@@ -221,10 +234,10 @@ export const api = {
     open: (root: string) => request<WorkspaceInfo>('/api/v1/workspace/open', { method: 'POST', body: JSON.stringify({ root }) }),
     tree: (root: string, path = '.', depth?: number, limit?: number) =>
       request<WorkspaceTree>('/api/v1/workspace/tree', { method: 'POST', body: JSON.stringify({ root, path, depth, limit }) }),
-    files: (root: string, query: string, limit?: number) =>
-      request<{ paths: string[] }>('/api/v1/workspace/files', { method: 'POST', body: JSON.stringify({ root, query, limit }) }),
-    read: (root: string, path: string, range: { start_line?: number; end_line?: number; max_bytes?: number } = {}) =>
-      request<WorkspaceFile>('/api/v1/workspace/read', { method: 'POST', body: JSON.stringify({ root, path, ...range }) }),
+    files: (root: string, query: string, limit?: number, signal?: AbortSignal, options?: { cache?: boolean }) =>
+      request<{ paths: string[] }>('/api/v1/workspace/files', { method: 'POST', body: JSON.stringify({ root, query, limit, ...options }), signal }),
+    read: (root: string, path: string, range: { start_line?: number; end_line?: number; max_bytes?: number } = {}, signal?: AbortSignal) =>
+      request<WorkspaceFile>('/api/v1/workspace/read', { method: 'POST', body: JSON.stringify({ root, path, ...range }), signal }),
     search: (
       root: string,
       pattern: string,
@@ -246,10 +259,10 @@ export const api = {
         signal,
       }),
     /** `git status` with line counts, or `is_git: false`. Never runs a shell: git is invoked directly. */
-    gitStatus: (root: string) => request<GitStatus>('/api/v1/workspace/git/status', { method: 'POST', body: JSON.stringify({ root }) }),
+    gitStatus: (root: string, signal?: AbortSignal, options?: { includeCounts?: boolean }) => request<GitStatus>('/api/v1/workspace/git/status', { method: 'POST', body: JSON.stringify({ root, include_counts: options?.includeCounts }), signal }),
     /** The unified diff of the working tree against HEAD — for one path, or the whole tree. */
-    gitDiff: (root: string, path?: string | null) =>
-      request<GitDiff>('/api/v1/workspace/git/diff', { method: 'POST', body: JSON.stringify({ root, path: path ?? null }) }),
+    gitDiff: (root: string, path?: string | null, signal?: AbortSignal) =>
+      request<GitDiff>('/api/v1/workspace/git/diff', { method: 'POST', body: JSON.stringify({ root, path: path ?? null }), signal }),
   },
 }
 

@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "label": "phase1",
+  "measuredAt": "2026-11-24T07:09:31.426Z",
+  "environment": {
+    "node": "v24.22.3",
+    "react": "19.2.8",
+    "jsdom": "26.1.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD EPYC 9V74 80-Core Processor"
+  },
+  "methodology": {
+    "fixture": "1000 conversations; active conversation has 1000 alternating user/assistant messages, other conversations have one user message. Assistant content has a heading, bold text and link. All history remains in the store.",
+    "fixtureSha256": "799d6b4689fde07c06c346cc753051d9c20cff5bf159df037e04a9ef3778599f",
+    "execution": "Actual App and stores, Vite module bundle, React.StrictMode, fresh jsdom process. Source bundling is outside the reported time. Bootstrap and persistence are stubbed; the status-poll API and EventSource are mocked.",
+    "geometry": "Synthetic transcript clientHeight 600, clientWidth 760; virtual sidebar clientHeight 480. ResizeObserver reports no measurements; jsdom has no CSS layout, paint or native scrolling.",
+    "markdown": "No Web Worker in jsdom. Phase 2 uses its idle asynchronous fallback; count taken after visible Markdown finishes.",
+    "timing": "One observation of Node/jsdom React mount + lazy imports + asynchronous formatting + 20ms settle polling. Not browser startup time, input latency, animation FPS or a statistically estimated speedup.",
+    "count": "Element counts include actual mounted DOM. No CSS visibility approximation is used; active transcript is identified by data-transcript-active. The new shell can add fixed elements while lists remove offscreen rows."
+  },
+  "counts": {
+    "conversationsInStore": 1000,
+    "messagesInActiveConversation": 1000,
+    "sidebarThreadRows": 1000,
+    "mountedActiveMessages": 1000,
+    "mountedAllMessages": 1000,
+    "virtualTranscriptRows": 0,
+    "activeTranscriptElements": 18004,
+    "totalAppElements": 31178,
+    "formattedMarkdownBlocks": 500,
+    "pendingMarkdownBlocks": 0
+  },
+  "nodeJsdomMountAndSettleMs": 4048.646,
+  "mockedRequests": [
+    "/api/v1/network/prompt-stack",
+    "/api/v1/network/prompt-stack"
+  ],
+  "sourceHashes": {
+    "src/App.tsx": "f299c30a1b4c3d0a6061c6b5ad03d9722a24edc62b7459bc44a64f0cb713bf63",
+    "src/components/Sidebar.tsx": "df7be8a1ae906f960dcd88a044365349ce25806b8b3df3dfffe0e4d3d247d1c4",
+    "src/components/ChatView.tsx": "c5f2615f6da73216208cfe486d6163d4f150fac29407f0310c857b40e86c7803",
+    "src/components/Markdown.tsx": "6549a4adc0930704017e9f87b6142ab59748b63fe522b00601e02d15dda1ff24",
+    "src/components/chat/TranscriptCache.tsx": "eae4d98d157a085fdf5e652e00aeb84a2e1ef936facdd6fac1b1c113fe2e54b0",
+    "src/components/chat/VirtualTranscript.tsx": null
+  },
+  "scriptSha256": "7940af2b187396e109ce77aeca74f947d22c623d5f0460f676453f2fc11dbcb6"
+}

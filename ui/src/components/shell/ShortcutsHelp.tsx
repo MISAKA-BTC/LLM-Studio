@@ -18,7 +18,8 @@ const GROUPS: Group[] = [
   {
     title: 'General',
     rows: [
-      { label: 'Command palette', keys: [SHORTCUTS.palette] },
+      { label: 'Command palette', keys: [SHORTCUTS.paletteEditor, SHORTCUTS.palette] },
+      { label: 'Quick Open files and conversations', keys: [SHORTCUTS.quickOpen] },
       { label: 'Keyboard shortcuts', keys: [SHORTCUTS.help] },
       { label: 'Toggle sidebar', keys: [SHORTCUTS.toggleSidebar] },
       { label: 'Settings', keys: [SHORTCUTS.settings] },
@@ -28,6 +29,8 @@ const GROUPS: Group[] = [
   {
     title: 'Navigation',
     rows: [
+      { label: 'Next / previous open tab', keys: [SHORTCUTS.nextTab, SHORTCUTS.previousTab], note: 'desktop app; arrows also work in the tab strip' },
+      ...(inDesktopShell ? [{ label: 'Close active tab', keys: [SHORTCUTS.closeTab], note: 'keeps history and drafts' }] : []),
       { label: 'Switch to Chat', keys: [SHORTCUTS.chatSide] },
       { label: 'Switch to Code', keys: [SHORTCUTS.codeSide] },
       {

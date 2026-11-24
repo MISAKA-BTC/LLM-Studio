@@ -1,0 +1,47 @@
+LLM Studio — phase 3 backend and responsiveness verification
+Date: 2026-11-24
+Reference: supplied vscode-main.zip, commit 25e7ea7b8ff47efaf5dd69ee2645f1ed1962ed2c
+
+FINAL GATES
+- cargo fmt --check: passed
+- cargo clippy --locked --all-targets -- -D warnings: passed
+- cargo test --locked: 396 reported passed, 0 failed, 1 ignored
+- Of the 396 reported passed, 5 existing environment-gated real-tokenizer/llama.cpp checks return early; 391 test bodies were exercised.
+- The separately ignored test reaches public testnet nodes. Real model/GPU inference was not run.
+- cargo build --release --locked: passed (Linux x86_64 core/runtime)
+- Release binary --check: passed; 79 UI assets embedded, confirmed outside the source directory
+- UI unit/component tests: 295/295 passed
+- Actual App/Activity DOM lifecycle checks: 37/37 passed
+- TypeScript and Vite production build: passed
+- Production Markdown worker test: passed against final built assets
+- Desktop build script tests: 7/7 passed (mocked orchestration, not a native Tauri build)
+
+CONFIRMED BEHAVIOR
+- Four quiet-upstream cancellation cases fail on phase 2 and pass on phase 3.
+- Shared monitoring, model scans, catalog calls and file indexes obey their work-count assertions.
+- Obsolete UI reads abort; active file previews recover without rendering an abort error or stale bytes.
+- Slow/failed remote-miner logs do not prevent status and Stop controls from rendering.
+- Existing chat drafts, transcript reading anchors, approvals and panel state remain covered.
+
+SCOPE AND LIMITS
+Source and built ui/dist are included. Native installers, node_modules, target output and VS Code reference sources are not included.
+Native core/runtime tests and an optimized runtime build ran on Linux. Tauri/WebView, real GPU inference and Windows/macOS are unverified.
+Operation counts are fixture observations, not input latency, FPS, disk throughput or speed ratios relative to VS Code.
+Model refresh still walks directories and stats metadata; first workspace file reads still count exact lines to EOF.
+UI file search has no native recursive watcher. Its 2-second index reuse is not a screen-update deadline.
+
+BUILD NOTES
+Cargo 1.100 reports the existing unused core sha2 manifest dependency; Clippy -D warnings still passes.
+Vite reports the existing static/dynamic import overlap of lib/agent/run.ts; the production build succeeds.
+
+DETAILS
+- ../BACKEND-OPTIMIZATION-JA.md
+- phase3-validation.json (accounting, commands, log hashes)
+- phase3-source-changes.json (44 source files compared to the immutable phase-2 delivery)
+- phase3-background-checks.json
+- workspace-performance.md
+- phase3-inference-checks.json
+- phase3-ui-checks.json
+- phase3-test-output.txt (captured output)
+
+The earlier UI-only verification remains in ui-validation-phase2.txt and ui-validation-phase1.txt.

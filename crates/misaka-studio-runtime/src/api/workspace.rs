@@ -7,7 +7,7 @@
 //! person happened to have open, and never an origin merely listed in `server.cors_origins`.
 
 use crate::state::AppState;
-use crate::workspace::{self, SearchRequest, Workspace, git};
+use crate::workspace::{self, Cancellation, SearchRequest, Workspace, git};
 use crate::{Error, Result};
 use axum::Json;
 use axum::extract::{FromRequest, Query, Request};
@@ -128,6 +128,9 @@ pub struct FilesBody {
     pub query: String,
     #[serde(default, deserialize_with = "lenient::usize_opt")]
     pub limit: Option<usize>,
+    /// Interactive typing may reuse a two-second index. Agent/tool calls remain fresh by default.
+    #[serde(default, deserialize_with = "lenient::bool_opt")]
+    pub cache: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -197,18 +200,56 @@ pub struct GitDiffBody {
     pub path: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GitStatusBody {
+    pub root: String,
+    /// Badges need changed paths and branch state, not a content diff of every changed file.
+    #[serde(default, deserialize_with = "lenient::bool_opt")]
+    pub include_counts: Option<bool>,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Handlers. Each one opens the workspace and does its work on the blocking pool: a canonicalize
 // or a directory walk is a syscall that can wait on a slow disk, a network mount, or — on macOS —
 // a privacy prompt the person has not answered yet.
 // ---------------------------------------------------------------------------------------------
 
+// Directory/search work has its own lane so it cannot consume every permit needed to open a
+// preview or apply an approved edit. Await the permit BEFORE spawn_blocking: queued requests do
+// not occupy Tokio's blocking threads, and a dropped queued future never starts its work.
+static INTERACTIVE_IO: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static SCAN_IO: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
 async fn blocking<T, F>(work: F) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.map_err(|e| Error::io("workspace", std::io::Error::other(e.to_string())))?
+    let permit = INTERACTIVE_IO.acquire().await.map_err(|_| Error::Cancelled)?;
+    // Mutations that have already started finish atomically even if the caller disconnects.
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|e| Error::io("workspace", std::io::Error::other(e.to_string())))?
+}
+
+async fn read_only<T, F>(lane: &'static tokio::sync::Semaphore, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(Cancellation) -> Result<T> + Send + 'static,
+{
+    let cancellation = Cancellation::default();
+    let _cancel_on_drop = cancellation.cancel_on_drop();
+    let permit = lane.acquire().await.map_err(|_| Error::Cancelled)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        cancellation.check()?;
+        work(cancellation)
+    })
+    .await
+    .map_err(|e| Error::io("workspace", std::io::Error::other(e.to_string())))?
 }
 
 fn parse_flag(value: Option<&str>) -> bool {
@@ -228,8 +269,8 @@ async fn open(Body(body): Body<OpenBody>) -> Result<Json<workspace::OpenResponse
 }
 
 async fn tree(Body(body): Body<TreeBody>) -> Result<Json<workspace::TreeResponse>> {
-    blocking(move || {
-        let root = Workspace::open(&body.root)?;
+    read_only(&SCAN_IO, move |cancellation| {
+        let root = Workspace::open(&body.root)?.with_cancellation(cancellation);
         workspace::tree(&root, body.path.as_deref(), body.depth, body.limit)
     })
     .await
@@ -237,17 +278,21 @@ async fn tree(Body(body): Body<TreeBody>) -> Result<Json<workspace::TreeResponse
 }
 
 async fn files(Body(body): Body<FilesBody>) -> Result<Json<workspace::FilesResponse>> {
-    blocking(move || {
-        let root = Workspace::open(&body.root)?;
-        workspace::files(&root, &body.query, body.limit)
+    read_only(&SCAN_IO, move |cancellation| {
+        let root = Workspace::open(&body.root)?.with_cancellation(cancellation);
+        if body.cache.unwrap_or(false) {
+            workspace::files_cached(&root, &body.query, body.limit)
+        } else {
+            workspace::files(&root, &body.query, body.limit)
+        }
     })
     .await
     .map(Json)
 }
 
 async fn read(Body(body): Body<ReadBody>) -> Result<Json<workspace::ReadResponse>> {
-    blocking(move || {
-        let root = Workspace::open(&body.root)?;
+    read_only(&INTERACTIVE_IO, move |cancellation| {
+        let root = Workspace::open(&body.root)?.with_cancellation(cancellation);
         workspace::read(&root, &body.path, body.start_line, body.end_line, body.max_bytes)
     })
     .await
@@ -255,8 +300,8 @@ async fn read(Body(body): Body<ReadBody>) -> Result<Json<workspace::ReadResponse
 }
 
 async fn search(Body(body): Body<SearchBody>) -> Result<Json<workspace::SearchResponse>> {
-    blocking(move || {
-        let root = Workspace::open(&body.root)?;
+    read_only(&SCAN_IO, move |cancellation| {
+        let root = Workspace::open(&body.root)?.with_cancellation(cancellation);
         let request = SearchRequest {
             pattern: body.pattern,
             path: body.path,
@@ -319,9 +364,10 @@ async fn exec_stream(Body(body): Body<ExecBody>) -> Result<Response> {
     Ok(Sse::new(frames).keep_alive(KeepAlive::default()).into_response())
 }
 
-async fn git_status(Body(body): Body<OpenBody>) -> Result<Json<git::GitStatus>> {
+async fn git_status(Body(body): Body<GitStatusBody>) -> Result<Json<git::GitStatus>> {
+    let include_counts = body.include_counts.unwrap_or(true);
     let root = blocking(move || Workspace::open(&body.root)).await?;
-    git::status(&root).await.map(Json)
+    git::status_with_counts(&root, include_counts).await.map(Json)
 }
 
 async fn git_diff(Body(body): Body<GitDiffBody>) -> Result<Json<git::GitDiff>> {
@@ -350,5 +396,66 @@ mod tests {
         assert!(serde_json::from_str::<TreeBody>(r#"{"root":"/x","depth":-1}"#).is_err());
         let edit: EditBody = serde_json::from_str(r#"{"root":"/x","path":"a","old_string":"a","new_string":"b"}"#).unwrap();
         assert_eq!(edit.replace_all, None);
+        let files: FilesBody = serde_json::from_str(r#"{"root":"/x","cache":"true"}"#).unwrap();
+        assert_eq!(files.cache, Some(true));
+        let status: GitStatusBody = serde_json::from_str(r#"{"root":"/x","include_counts":false}"#).unwrap();
+        assert_eq!(status.include_counts, Some(false));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropped_read_future_cancels_running_work_and_keeps_its_permit_until_it_stops() {
+        use std::sync::{Condvar, Mutex};
+        use std::time::Duration;
+        let lane = Box::leak(Box::new(tokio::sync::Semaphore::new(1)));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let worker_release = release.clone();
+        let task = tokio::spawn(read_only(lane, move |cancellation| {
+            let _ = started_tx.send(());
+            while cancellation.check().is_ok() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let _ = cancelled_tx.send(());
+            let (lock, wake) = &*worker_release;
+            let mut allowed = lock.lock().unwrap();
+            while !*allowed {
+                allowed = wake.wait(allowed).unwrap();
+            }
+            cancellation.check()
+        }));
+        started_rx.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), cancelled_rx).await.unwrap().unwrap();
+        assert_eq!(lane.available_permits(), 0, "aborted futures do not free a slot while their blocking work still runs");
+        *release.0.lock().unwrap() = true;
+        release.1.notify_all();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while lane.available_permits() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropping_a_queued_read_never_starts_its_blocking_work() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let lane = Box::leak(Box::new(tokio::sync::Semaphore::new(0)));
+        let entered = Arc::new(AtomicBool::new(false));
+        let worker_entered = entered.clone();
+        let task = tokio::spawn(read_only(lane, move |_| {
+            worker_entered.store(true, Ordering::SeqCst);
+            Ok(())
+        }));
+        tokio::task::yield_now().await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        lane.add_permits(1);
+        tokio::task::yield_now().await;
+        assert!(!entered.load(Ordering::SeqCst));
+        assert_eq!(lane.available_permits(), 1);
     }
 }

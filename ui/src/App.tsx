@@ -5,19 +5,14 @@
 // side in view (Chat or Code). Each is set up once for the life of the window rather than per
 // view, so switching tabs does not tear down the metrics stream and lose the sparkline history.
 //
-// The layout is the Cursor one: sidebar | view, with a status bar across the whole width beneath
-// both, and the palette, the shortcut sheet and the folder picker mounted once above everything.
+// The workbench keeps its Activity Bar, sidebar and open-tab strip independent from retained
+// views. Its status bar and window-level dialogs are mounted once.
 
-import { useEffect, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, type DragEvent, type ReactNode } from 'react'
 import { subscribe } from './lib/api'
+import { carriesFiles } from './lib/fileDrop'
 import type { DownloadProgress, RuntimeSample } from './lib/types'
 import { useStudio, type View } from './store/studio'
-import { ChatView } from './components/ChatView'
-import { ImageView } from './components/ImageView'
-import { ModelsView } from './components/ModelsView'
-import { MonitorView } from './components/MonitorView'
-import { NetworkView } from './components/NetworkView'
-import { SettingsView } from './components/SettingsView'
 import { Sidebar } from './components/Sidebar'
 import { WorkspacePicker } from './components/agent/WorkspacePicker'
 import { CommandPalette } from './components/shell/CommandPalette'
@@ -27,7 +22,26 @@ import { useMiningPoll } from './components/shell/mining'
 import { VIEW_ICONS, VIEW_LABELS } from './components/shell/shortcuts'
 import { useSideSync } from './components/shell/sideSync'
 import { useGlobalShortcuts } from './components/shell/useGlobalShortcuts'
+import { RetainedView } from './components/shell/RetainedView'
+import { QuickOpen } from './components/shell/QuickOpen'
+import { WorkbenchTabs } from './components/shell/WorkbenchTabs'
+import { useWorkbenchSync } from './components/shell/workbenchState'
+import { useCodeWatchers } from './components/code/watchers'
 import { Icon } from './components/common'
+
+// The shell becomes interactive without evaluating every settings page, chart and renderer.
+// Each chunk is requested on its first visit; revisits reuse both its module and its UI state.
+const ChatView = lazy(() => import('./components/ChatView').then((m) => ({ default: m.ChatView })))
+const ImageView = lazy(() => import('./components/ImageView').then((m) => ({ default: m.ImageView })))
+const ModelsView = lazy(() => import('./components/ModelsView').then((m) => ({ default: m.ModelsView })))
+const MonitorView = lazy(() => import('./components/MonitorView').then((m) => ({ default: m.MonitorView })))
+const NetworkView = lazy(() => import('./components/NetworkView').then((m) => ({ default: m.NetworkView })))
+const SettingsView = lazy(() => import('./components/SettingsView').then((m) => ({ default: m.SettingsView })))
+
+// A file dropped outside an attachment area must not navigate away from the app.
+function preventFileNavigation(event: DragEvent) {
+  if (carriesFiles(event)) event.preventDefault()
+}
 
 export default function App() {
   const view = useStudio((s) => s.view)
@@ -76,9 +90,10 @@ export default function App() {
   // Whatever opens a thread, the window follows it to its side; a deleted thread falls back on
   // its own side.
   useSideSync()
+  useWorkbenchSync()
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden" onDragOver={preventFileNavigation} onDrop={preventFileNavigation}>
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar />
         {/* `min-h-0` is the whole fix for a page that scrolled forever. A flex item defaults to
@@ -89,34 +104,58 @@ export default function App() {
             instead, past the end of the app. `overflow-hidden` is the belt to that braces: the
             shell already clips, and saying so here keeps a future overflowing child from escaping
             the same way. */}
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          {view === 'chat' && <ChatView />}
-          {view === 'models' && <ModelsView />}
-          {view === 'image' && <ImageView />}
-          {view === 'network' && (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <WorkbenchTabs />
+        <main id="workbench-content" className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <ViewSlot view="chat" active={view === 'chat'}><ChatView /></ViewSlot>
+          <ViewSlot view="models" active={view === 'models'}><ModelsView /></ViewSlot>
+          <ViewSlot view="image" active={view === 'image'}><ImageView /></ViewSlot>
+          <ViewSlot view="network" active={view === 'network'}>
             <Page view="network" note="Prompt mining, the classes and the chain">
               <NetworkView />
             </Page>
-          )}
-          {view === 'monitor' && (
+          </ViewSlot>
+          <ViewSlot view="monitor" active={view === 'monitor'}>
             <Page view="monitor" note="This machine and the engine, live">
               <MonitorView />
             </Page>
-          )}
-          {view === 'settings' && (
+          </ViewSlot>
+          <ViewSlot view="settings" active={view === 'settings'}>
             <Page view="settings" note="Saved to the runtime's settings file">
               <SettingsView />
             </Page>
-          )}
+          </ViewSlot>
         </main>
+        </div>
       </div>
       <StatusBar />
+      <CodeWatchers />
 
       <CommandPalette />
+      <QuickOpen />
       <ShortcutsHelp />
       <WorkspacePicker />
       <Toasts />
     </div>
+  )
+}
+
+/** Agent/file change services outlive a hidden chat. They are subscribed once per window. */
+function CodeWatchers() {
+  const conversation = useStudio((s) => s.conversations.find((c) => c.id === s.activeConversationId) ?? null)
+  useCodeWatchers(conversation)
+  return null
+}
+
+function ViewSlot({ view, active, children }: { view: View; active: boolean; children: ReactNode }) {
+  return (
+    <RetainedView active={active}>
+      <div className="h-full min-h-0 overflow-hidden" data-workbench-view={view}>
+        <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-ink-500" role="status">Opening {VIEW_LABELS[view]}…</div>}>
+          {children}
+        </Suspense>
+      </div>
+    </RetainedView>
   )
 }
 

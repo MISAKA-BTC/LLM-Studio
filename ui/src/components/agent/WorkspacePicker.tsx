@@ -1,8 +1,7 @@
 // The folder picker: where an agent thread works.
 //
-// Three ways in, for three habits: a recent folder (one click), a path pasted or typed (Enter), and
-// a browser over the runtime's `browse` — the window cannot open a native folder dialog itself, and
-// the runtime is what will be reading the folder anyway. Choosing asks the runtime to open the
+// Pick a recent folder, type or paste a path, browse the runtime's filesystem, or drop a folder
+// into the desktop window. Choosing asks the runtime to open the
 // folder first, so a path that does not exist or cannot be read is refused here, in the dialog,
 // rather than at the agent's first step.
 //
@@ -14,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useAgent } from '../../lib/agent/run'
 import { folderName, rememberWorkspace, tildePath } from '../../lib/agent/workspace'
+import { hasNativeFileDrop, useFileDrop } from '../../lib/fileDrop'
 import type { BrowseView } from '../../lib/types'
 import { useStudio } from '../../store/studio'
 import { useUi } from '../../store/ui'
@@ -48,19 +48,43 @@ function PickerBody({ conversationId, onClose }: { conversationId: string | null
   const [confirmMove, setConfirmMove] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const browseRequest = useRef(0)
   const home = view?.home ?? null
 
   const browse = async (path: string | null, showHidden = hidden) => {
+    const request = ++browseRequest.current
     setBrowsing(true)
     setBrowseError(null)
     try {
-      setView(await api.workspace.browse(path, showHidden))
+      const next = await api.workspace.browse(path, showHidden)
+      if (request === browseRequest.current) setView(next)
     } catch (error) {
-      setBrowseError((error as Error).message)
+      if (request === browseRequest.current) setBrowseError((error as Error).message)
     } finally {
-      setBrowsing(false)
+      if (request === browseRequest.current) setBrowsing(false)
     }
   }
+
+  const { dragging, dropHandlers, dropRef } = useFileDrop({
+    kind: 'folder',
+    onPaths: (paths) => {
+      if (opening) return
+      if (paths.length === 0) {
+        setOpenError('Paste the folder path here, or drop the folder in the desktop app.')
+        return
+      }
+      const [path] = paths
+      if (paths.length !== 1 || !path) {
+        setOpenError('Drop one folder to select it.')
+        return
+      }
+      setConfirmMove(null)
+      setOpenError(null)
+      setInput(path)
+      setView(null)
+      void browse(path)
+    },
+  })
 
   useEffect(() => {
     // Start where the thread already is, else beside the last folder used, else at home.
@@ -122,7 +146,7 @@ function PickerBody({ conversationId, onClose }: { conversationId: string | null
   }
 
   return (
-    <div className="flex max-h-[min(40rem,85vh)] flex-col">
+    <div ref={dropRef} className="relative flex max-h-[min(40rem,85vh)] flex-col" {...dropHandlers}>
       <div className="flex items-start gap-3 px-4 pb-3 pt-4">
         <div className="rounded-lg bg-arc-500/10 p-2 text-arc-600 dark:text-arc-400">
           <Icon name="folderOpen" className="size-4" />
@@ -166,6 +190,9 @@ function PickerBody({ conversationId, onClose }: { conversationId: string | null
           {opening === input.trim() ? <Spinner className="size-3.5" /> : 'Open'}
         </button>
       </form>
+      {hasNativeFileDrop && (
+        <p className="mx-4 mt-2 text-xs text-ink-500 dark:text-ink-400">Or drop a folder here</p>
+      )}
 
       {openError && (
         <p className="mx-4 mt-2 flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
@@ -350,6 +377,11 @@ function PickerBody({ conversationId, onClose }: { conversationId: string | null
           Open {view ? `“${folderName(view.path) || view.path}”` : 'this folder'}
         </button>
       </div>
+      {dragging && (
+        <div className="pointer-events-none absolute inset-1 z-10 grid place-items-center rounded-xl border-2 border-dashed border-arc-500 bg-arc-500/10">
+          <span className="rounded-lg bg-white px-4 py-2 text-sm font-medium shadow-md dark:bg-ink-900">Drop a folder here</span>
+        </div>
+      )}
     </div>
   )
 }

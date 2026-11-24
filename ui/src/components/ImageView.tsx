@@ -7,6 +7,7 @@
 // than just a text-to-image box with an unused feature.
 
 import { useRef, useState } from 'react'
+import { useFileDrop } from '../lib/fileDrop'
 import { bytes } from '../lib/format'
 import { useStudio } from '../store/studio'
 import { EmptyState, FitBadge, Icon, Spinner } from './common'
@@ -104,15 +105,21 @@ function GenerateForm() {
 
   const canGenerate = runtime?.model_id != null && prompt.trim().length > 0 && !generating
 
-  const addFiles = async (files: FileList | null) => {
-    if (!files) return
-    const added = await Promise.all(
-      Array.from(files)
-        .filter((f) => f.type.startsWith('image/'))
-        .map(async (file) => ({ name: file.name, previewUrl: URL.createObjectURL(file), base64: await fileToBase64(file) })),
+  const addFiles = async (files: File[]) => {
+    const images = files.filter((file) => file.type.startsWith('image/'))
+    const toast = useStudio.getState().toast
+    if (images.length !== files.length) toast('info', 'Only image files can be added as references.')
+    const results = await Promise.allSettled(
+      images.map(async (file) => {
+        const base64 = await fileToBase64(file)
+        return { name: file.name, previewUrl: URL.createObjectURL(file), base64 }
+      }),
     )
-    setReferences((prev) => [...prev, ...added])
+    const added = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+    if (added.length !== images.length) toast('error', 'Some reference images could not be read.')
+    if (added.length) setReferences((prev) => [...prev, ...added])
   }
+  const { dragging, dropHandlers, dropRef } = useFileDrop({ kind: 'image', onFiles: (files) => void addFiles(files) })
 
   const submit = async () => {
     if (!canGenerate) return
@@ -189,15 +196,31 @@ function GenerateForm() {
         </label>
       </div>
 
-      <div>
+      <div
+        ref={dropRef}
+        className={`rounded-xl border border-dashed p-3 ${dragging ? 'border-arc-500 bg-arc-500/10' : 'border-ink-300 dark:border-ink-700'}`}
+        {...dropHandlers}
+      >
         <div className="mb-1.5 flex items-center justify-between text-xs text-ink-500 dark:text-ink-400">
-          <span>Reference images — multi-reference generation and editing</span>
+          <span>Reference images</span>
           <button type="button" className="btn-ghost px-2 py-1" onClick={() => fileInput.current?.click()}>
             <Icon name="plus" className="size-3.5" />
             Add
           </button>
-          <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={(event) => void addFiles(event.target.files)} />
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? [])
+              event.target.value = ''
+              void addFiles(files)
+            }}
+          />
         </div>
+        <p className="mb-1.5 text-xs text-ink-500 dark:text-ink-400">Drop reference images here</p>
         {references.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {references.map((ref, i) => (

@@ -1,6 +1,6 @@
-// The mining list, at the top of Discover.
+// The mining section of Model Search.
 //
-// Discover answers "what can I install?", and on this network that question has two halves that
+// Model Search answers "what can I install?", and on this network that question has two halves that
 // look alike and are not:
 //
 // * Any GGUF on Hugging Face — a model to **talk to**. Unbounded, so it is a search box.
@@ -159,10 +159,18 @@ export function InstalledMiningArtifacts() {
   )
 }
 
-export function MiningCatalog() {
+export function MiningCatalog({ searchable = false }: { searchable?: boolean } = {}) {
   const { classes, nodeRows, error } = useClassStatuses()
+  const [query, setQuery] = useState('')
   const toast = useStudio((s) => s.toast)
   const setDownload = useStudio((s) => s.setDownload)
+  const terms = query.trim().toLowerCase().split(/\s+/)
+  const filtered = classes?.filter(({ spec }) => {
+    const repo = spec.artifact.kind === 'download' ? spec.artifact.hf_repo
+      : spec.artifact.kind === 'convert_locally' ? spec.artifact.source_repo : ''
+    const fields = `${spec.name} ${repo}`.toLowerCase()
+    return terms.every((term) => fields.includes(term))
+  })
 
   const install = async (name: string) => {
     try {
@@ -181,12 +189,15 @@ export function MiningCatalog() {
         <span className="text-[0.7rem] text-ink-500 dark:text-ink-400">testnet-12 genesis registry</span>
       </div>
       <p className="mt-1 text-xs leading-relaxed text-ink-500 dark:text-ink-400">
-        A block on the MISAKA network is won by verified inference in one of these chain-registered classes, and each one names
-        the Hugging Face repository it is installed from. Everything else in Discover is a model to chat with; only these produce
-        blocks. Share is still reported: it is the fraction of finalized work a class provided, never a cut of the emission, never
-        a lottery input, never an epoch block budget. A block buys one unit of work from any model. Each successful model draw can
-        win a separate block; the Explorer keeps claim and block identities apart.
+        These classes are registered on the MISAKA chain for block production. Each class lists its artifact source and setup.
+        Finalized work share measures the work that a class contributed.
       </p>
+
+      {searchable && (
+        <input type="search" className="input mt-3 max-w-lg" aria-label="Search mining classes"
+          placeholder="Search by class name or Hugging Face repository" value={query} onChange={(event) => setQuery(event.target.value)} />
+      )}
+      {filtered?.length === 0 && <p className="mt-3 text-xs text-ink-500 dark:text-ink-400">No matching mining classes.</p>}
 
       {error && (
         <p className="mt-3 flex gap-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
@@ -205,7 +216,7 @@ export function MiningCatalog() {
       )}
 
       <div className="mt-3 space-y-2">
-        {classes?.map((cls) => (
+        {filtered?.map((cls) => (
           <MiningRow key={cls.spec.name} cls={cls} nodeRows={nodeRows} onInstall={install} />
         ))}
       </div>

@@ -30,7 +30,6 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use misaka_studio_core::provenance::RuntimeDescriptor;
 use serde_json::Value;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
@@ -255,13 +254,12 @@ impl InferenceBackend for GatewayBackend {
             };
 
             let response = send(ceiling).await?;
-            let claim_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
             Ok(crate::backend::mock::async_stream(move |tx| async move {
                 let mut retried = false;
                 let mut parser = SseParser::new(true);
                 let mut byte_stream = response.bytes_stream();
                 use futures_util::StreamExt;
-                let mut tail = Vec::new();
+                let mut claim_seen = false;
 
                 while let Some(chunk) = byte_stream.next().await {
                     let chunk = match chunk {
@@ -272,30 +270,28 @@ impl InferenceBackend for GatewayBackend {
                         }
                     };
                     // The gateway's last event carries `misaka` — the job and claim ids. It is not
-                    // part of the OpenAI shape, so the parser drops it; it is logged here because a
+                    // part of the OpenAI shape; inspect it in the parser's existing pass because a
                     // chat that produced a claim and never said which one is a chat nobody can
-                    // follow to the chain.
-                    tail.extend_from_slice(&chunk);
-                    if !claim_seen.load(std::sync::atomic::Ordering::Relaxed)
-                        && let Some(outcome) = claim_outcome_in(&tail)
-                    {
-                        claim_seen.store(true, std::sync::atomic::Ordering::Relaxed);
-                        // The gateway says whether this answer became a claim. A claim id alone
-                        // is not a commitment: it is what the job WOULD claim, reported even when
-                        // the bond's room or the operator's budget kept it off the chain.
-                        match outcome.committed {
-                            Some(true) => tracing::info!(claim = %outcome.claim, "free-prompt claim committed"),
-                            Some(false) => tracing::warn!(
-                                claim = %outcome.claim,
-                                reason = %outcome.not_committed_because.as_deref().unwrap_or("the gateway gave no reason"),
-                                "answered, not committed: this chat is not on its way to the chain"
-                            ),
-                            None => {
-                                tracing::info!(claim = %outcome.claim, "free-prompt claim (this gateway does not say whether it committed)")
+                    // follow to the chain. No whole-response tail or second JSON parse is needed.
+                    let events = parser.push_with_metadata(&chunk, |value| {
+                        if !claim_seen && let Some(outcome) = claim_outcome(value) {
+                            claim_seen = true;
+                            // The gateway says whether this answer became a claim. A claim id
+                            // alone is not a commitment: it also names an uncommitted attempt.
+                            match outcome.committed {
+                                Some(true) => tracing::info!(claim = %outcome.claim, "free-prompt claim committed"),
+                                Some(false) => tracing::warn!(
+                                    claim = %outcome.claim,
+                                    reason = %outcome.not_committed_because.as_deref().unwrap_or("the gateway gave no reason"),
+                                    "answered, not committed: this chat is not on its way to the chain"
+                                ),
+                                None => {
+                                    tracing::info!(claim = %outcome.claim, "free-prompt claim (this gateway does not say whether it committed)")
+                                }
                             }
                         }
-                    }
-                    for event in parser.push(&chunk) {
+                    });
+                    for event in events {
                         if tx.send(Ok(event)).await.is_err() {
                             return;
                         }
@@ -383,25 +379,63 @@ struct ClaimOutcome {
 /// The gateway's verdict out of whatever of the stream has arrived, once its final event — the
 /// one carrying `misaka` — is complete. Parsed as JSON rather than scanned: `committed` and the
 /// reason ride beside the claim id, and the claim id alone read as "committed" when it was not.
+#[cfg(test)]
 fn claim_outcome_in(bytes: &[u8]) -> Option<ClaimOutcome> {
     let text = String::from_utf8_lossy(bytes);
     for event in text.split("\n\n") {
         let Some(data) = event.trim().strip_prefix("data:") else { continue };
         let Ok(value) = serde_json::from_str::<Value>(data.trim()) else { continue };
-        let Some(misaka) = value.get("misaka") else { continue };
-        let Some(claim) = misaka.get("fp_claim_id").and_then(Value::as_str) else { continue };
-        return Some(ClaimOutcome {
-            claim: claim.to_string(),
-            committed: misaka.get("committed").and_then(Value::as_bool),
-            not_committed_because: misaka.get("not_committed_because").and_then(Value::as_str).map(str::to_string),
-        });
+        if let Some(outcome) = claim_outcome(&value) {
+            return Some(outcome);
+        }
     }
     None
+}
+
+fn claim_outcome(value: &Value) -> Option<ClaimOutcome> {
+    let misaka = value.get("misaka")?;
+    let claim = misaka.get("fp_claim_id").and_then(Value::as_str)?;
+    Some(ClaimOutcome {
+        claim: claim.to_string(),
+        committed: misaka.get("committed").and_then(Value::as_bool),
+        not_committed_because: misaka.get("not_committed_because").and_then(Value::as_str).map(str::to_string),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claim_receipts_are_read_once_in_the_same_pass_as_fragmented_deltas() {
+        let mut bytes = String::new();
+        for index in 0..512 {
+            bytes.push_str(&format!(
+                "data: {}\n\n",
+                serde_json::json!({ "choices": [{ "delta": { "content": format!("token {index}") } }] })
+            ));
+        }
+        let receipt =
+            "data: {\"misaka\":{\"fp_claim_id\":\"abc123\",\"committed\":false,\"not_committed_because\":\"budget exhausted\"}}\n\n";
+        bytes.push_str(receipt);
+        bytes.push_str("data: [DONE]\n\n");
+        let mut parser = SseParser::new(true);
+        let mut parsed_frames = 0;
+        let mut outcomes = Vec::new();
+        let mut deltas = Vec::new();
+        for chunk in bytes.as_bytes().chunks(3) {
+            deltas.extend(parser.push_with_metadata(chunk, |value| {
+                parsed_frames += 1;
+                if let Some(outcome) = claim_outcome(value) {
+                    outcomes.push(outcome);
+                }
+            }));
+        }
+        assert_eq!(parsed_frames, 513, "each complete JSON frame is inspected once, never replayed from history");
+        assert_eq!(deltas.len(), 512);
+        assert_eq!(outcomes, vec![claim_outcome_in(receipt.as_bytes()).unwrap()]);
+        assert_eq!(outcomes[0].committed, Some(false), "an ID alone must not be reported as a committed claim");
+    }
 
     /// The refusal carries the arithmetic that makes the retry exact. Written against the message
     /// the live worker actually sent, because a parser written against an imagined format is a

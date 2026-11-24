@@ -4,12 +4,13 @@
 // retried here after the cause is fixed, and a queued one can be dropped here. The chat only
 // carries a badge that points back to this.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '../lib/api'
 import { relativeTime } from '../lib/format'
-import type { MiningJob, MiningQueueView } from '../lib/types'
+import type { MiningJob } from '../lib/types'
 import { useStudio } from '../store/studio'
 import { Icon, Toggle } from './common'
+import { useMiningQueuePolling } from './shell/mining'
 
 function statusBadge(job: MiningJob) {
   switch (job.status) {
@@ -29,28 +30,16 @@ function statusBadge(job: MiningJob) {
 export function MiningQueuePanel() {
   const toast = useStudio((s) => s.toast)
   const refreshMining = useStudio((s) => s.refreshMining)
-  const [view, setView] = useState<MiningQueueView | null>(null)
+  const view = useStudio((s) => s.miningQueue)
+  const acceptMiningQueue = useStudio((s) => s.acceptMiningQueue)
+  useMiningQueuePolling()
   const [busy, setBusy] = useState(false)
-
-  const read = useCallback(async () => {
-    try {
-      setView(await api.miningQueue())
-    } catch {
-      setView(null)
-    }
-  }, [])
-
-  useEffect(() => {
-    void read()
-    const timer = setInterval(() => void read(), 10_000)
-    return () => clearInterval(timer)
-  }, [read])
 
   const setMode = async (background: boolean) => {
     setBusy(true)
     try {
       const next = await api.miningMode(background ? 'background' : 'inline')
-      setView(next)
+      acceptMiningQueue(next)
       await refreshMining()
       toast(
         'success',
@@ -69,7 +58,6 @@ export function MiningQueuePanel() {
     setBusy(true)
     try {
       await fn()
-      await read()
       await refreshMining()
     } catch (error) {
       toast('error', `${label}: ${(error as Error).message}`)

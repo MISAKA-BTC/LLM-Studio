@@ -1,0 +1,71 @@
+LLM Studio — UI変更の検証記録
+実行日: 2026-11-24
+環境: Linux、Node.js v24.22.3、npm 11.19.1
+対象: 今回の変更をすべて統合したソース
+
+1. npm --prefix ui test
+ℹ tests 229
+ℹ suites 0
+ℹ pass 229
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2113.955474
+
+2. npm --prefix ui run test:workbench
+PASS retained panes mount on first visit and keep their DOM/state while pausing effects
+PASS revealing an existing approval does not move keyboard focus onto Approve
+PASS unvisited screens do not eagerly load their APIs
+PASS chat draft, selection, transcript node and reading position survive navigation
+PASS Models keeps the selected Discover tab and its search draft
+PASS an unsaved message edit keeps its text and selection when the chat is restored
+PASS Monitor keeps the newest 120 samples while hidden without recording again on reveal
+PASS Settings preserves unsaved values and its scroll container
+PASS hidden Settings stops install polling and resumes exactly one poll on return
+PASS one main surface is visible and window subscriptions survive repeated navigation
+PASS returning to a recent conversation reuses its transcript and shows updates made while hidden
+PASS a fourth recent transcript evicts only the least recently viewed DOM, preserving all messages
+PASS visiting an empty new chat retains recent transcripts and its own unsent draft
+PASS Files renders only the visible rows of a 5000-entry folder and supports End/Home
+PASS file previews retain their DOM and reading position across panel switches without rereading
+PASS the same file path in two projects never displays bytes from the other project
+PASS Terminal keeps an unsent command and reading position through tab, close and Chat/Code switches
+PASS Terminal drafts stay with their project and no command runs when a panel is restored
+Workbench DOM checks: 18/18 passed.
+These are state/lifecycle checks; no browser latency measurement is claimed.
+本AppはReact.StrictModeでマウント。実コンポーネント、jsdom、モックAPIを使用。
+
+3. npm --prefix ui run build
+TypeScript型検査・Vite production build: 成功
+dist/assets/highlight.worker-BP-w6Cke.js              165.32 kB
+dist/assets/MiningQueuePanel-8ckBpJmw.js                4.29 kB │ gzip:   1.71 kB │ map:    10.08 kB
+dist/assets/ImageView-CyGg4g7f.js                       7.00 kB │ gzip:   2.54 kB │ map:    19.05 kB
+dist/assets/MonitorView-Bmii4wpB.js                     9.19 kB │ gzip:   3.06 kB │ map:    23.00 kB
+dist/assets/ModelsView-Z-SIfFTC.js                     14.61 kB │ gzip:   4.55 kB │ map:    38.44 kB
+dist/assets/MiningCatalog-C5FGOVJ9.js                  15.10 kB │ gzip:   4.54 kB │ map:    35.69 kB
+dist/assets/SettingsView-DBs2ezUT.js                   24.42 kB │ gzip:   7.54 kB │ map:    58.60 kB
+dist/assets/NetworkView-J3tJQ5Ga.js                    40.18 kB │ gzip:  11.20 kB │ map:    94.67 kB
+dist/assets/index-B00IAMEb.js                         436.59 kB │ gzip: 140.82 kB │ map: 1,763.41 kB
+dist/assets/ChatView-CivPJ7MC.js                      793.17 kB │ gzip: 236.56 kB │ map: 3,186.14 kB
+✓ built in 4.54s
+
+残るビルド警告:
+- agent/run.ts の静的・動的 import が混在しており、このモジュール自体は別chunkへ分離されない。
+- ChatViewのchunkは500 kBを超える。entryだけの縮小率を起動速度の改善率とは扱わない。
+
+元ZIPの基準結果:
+- 既存ユニットテスト209/209成功、production build成功。
+- 元ZIPの実Appへ同じ状態保持テストを適用すると、Chat DOM、Modelsタブ、Monitor履歴、Settingsの4ケースで意図した失敗を確認。
+
+測定範囲:
+- DOM同一性、入力値・selection・scrollTop、描画行数、API呼出回数、effectの開始・停止、保存処理を検証。
+- 500 SSE chunksを同一バーストで渡す回帰テスト: store通知2回（開始と内容反映）、全文保持。
+- 同一履歴で1,000回navigationを更新する回帰テスト: 履歴本体のJSON化は初回1回。
+- 5,000ファイルの仮想一覧: テストviewport条件では40未満のDOM行。
+- 最近3会話のDOMを保持し、4会話目では最も古いDOMだけを解放。会話履歴を保持。
+
+未実施:
+- 実ブラウザのpaint/layout、操作遅延、FPSの実測。
+- Windows/macOS/LinuxのTauri実機確認、Rust runtimeとネイティブ配布物のビルド。
+Chromium起動は実行環境のsocket制限で実施できなかったため、jsdomの処理時間をブラウザ性能値として報告していない。

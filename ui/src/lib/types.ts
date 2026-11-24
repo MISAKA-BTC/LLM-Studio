@@ -316,6 +316,23 @@ export type CatalogRepo = {
   gated: boolean
   files: CatalogFile[]
   base_model: string | null
+  entry: CatalogEntry
+  architecture: string | null
+  parameters: number | null
+  context_length: number | null
+  license: string | null
+  variants: CatalogVariant[]
+}
+
+export type CatalogFormat = 'gguf' | 'mlx'
+export type CatalogSort = 'best_match' | 'trending' | 'downloads' | 'likes' | 'updated'
+
+export type CatalogVariant = {
+  id: string
+  format: CatalogFormat
+  label: string
+  size: number | null
+  files: CatalogFile[]
 }
 
 export type DownloadProgress = {
@@ -586,6 +603,8 @@ export type GitFile = {
 /** `git status` of a workspace — or `is_git: false` for a folder that is not a repository. */
 export type GitStatus = {
   is_git: boolean
+  /** False for a lightweight status read; totals and per-file line counts were not computed. */
+  counts_included?: boolean
   branch: string | null
   /** Short commit id of HEAD; `null` in a repository with no commits yet. */
   head: string | null

@@ -224,7 +224,7 @@ export function EmptyHero({ conversation, children }: { conversation: Conversati
           <div className="mt-3 max-w-lg text-[0.8rem] leading-relaxed text-ink-500 dark:text-ink-400">
             {models.length === 0 ? (
               <>
-                No models are installed yet. Open <strong>Models → Discover</strong> to find one on Hugging Face — the list shows what fits
+                No models are installed yet. Open <strong>Models → Model Search</strong> to find one on Hugging Face — the list shows what fits
                 this machine before you download anything.
                 {/* Otherwise this reads as "nothing was installed" to someone who just watched
                     1.7 GiB arrive. A class artifact is a real thing on disk; it is simply not a

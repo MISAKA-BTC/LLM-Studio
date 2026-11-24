@@ -22,7 +22,133 @@
 
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, OnceCell};
+
+struct Cached<V> {
+    value: V,
+    at: Instant,
+    used: Instant,
+}
+
+type SharedRequest<V> = OnceCell<std::result::Result<V, String>>;
+
+/// Instance-local: changing endpoint or credentials replaces the Catalog and all its entries.
+/// Only successful responses enter the bounded TTL cache. Overlapping callers share the same
+/// result (including an error); cancelled initializers are retried by OnceCell's next waiter.
+struct RequestCache<K, V> {
+    entries: Mutex<HashMap<K, Cached<V>>>,
+    requests: Mutex<HashMap<K, Weak<SharedRequest<V>>>>,
+    ttl: Duration,
+    capacity: usize,
+}
+
+impl<K: Clone + Eq + Hash, V: Clone> RequestCache<K, V> {
+    fn new(ttl: Duration, capacity: usize) -> Self {
+        Self { entries: Mutex::new(HashMap::new()), requests: Mutex::new(HashMap::new()), ttl, capacity }
+    }
+
+    async fn get(&self, key: &K) -> Option<V> {
+        let mut entries = self.entries.lock().await;
+        let entry = entries.get_mut(key)?;
+        if entry.at.elapsed() >= self.ttl {
+            entries.remove(key);
+            return None;
+        }
+        entry.used = Instant::now();
+        Some(entry.value.clone())
+    }
+
+    async fn insert(&self, key: K, value: V) {
+        let mut entries = self.entries.lock().await;
+        entries.retain(|_, entry| entry.at.elapsed() < self.ttl);
+        if entries.len() >= self.capacity
+            && !entries.contains_key(&key)
+            && let Some(oldest) = entries.iter().min_by_key(|(_, entry)| entry.used).map(|(key, _)| key.clone())
+        {
+            entries.remove(&oldest);
+        }
+        let now = Instant::now();
+        entries.insert(key, Cached { value, at: now, used: now });
+    }
+
+    async fn load<F, Fut>(&self, key: K, fetch: F) -> Result<V>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<V>>,
+    {
+        if let Some(value) = self.get(&key).await {
+            return Ok(value);
+        }
+        let request = {
+            let mut requests = self.requests.lock().await;
+            requests.retain(|_, request| request.strong_count() > 0);
+            match requests.get(&key).and_then(Weak::upgrade) {
+                Some(request) => request,
+                None => {
+                    let request = Arc::new(OnceCell::new());
+                    requests.insert(key.clone(), Arc::downgrade(&request));
+                    request
+                }
+            }
+        };
+        request
+            .get_or_init(|| async {
+                // Another caller may have completed between the first lookup and joining the flight.
+                if let Some(value) = self.get(&key).await {
+                    return Ok(value);
+                }
+                let result = fetch().await.map_err(|error| match error {
+                    Error::Catalog { message } => message,
+                    error => error.to_string(),
+                });
+                if let Ok(value) = &result {
+                    self.insert(key, value.clone()).await;
+                }
+                result
+            })
+            .await
+            .clone()
+            .map_err(|message| Error::Catalog { message })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchFormat {
+    All,
+    #[default]
+    Gguf,
+    Mlx,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchSort {
+    BestMatch,
+    Trending,
+    #[default]
+    Downloads,
+    Likes,
+    Updated,
+}
+
+impl SearchSort {
+    fn field(self, query: &str) -> Option<&'static str> {
+        match self {
+            Self::BestMatch if !query.is_empty() => None,
+            Self::BestMatch | Self::Trending => Some("trendingScore"),
+            Self::Downloads => Some("downloads"),
+            Self::Likes => Some("likes"),
+            Self::Updated => Some("lastModified"),
+        }
+    }
+}
 
 /// A repository, as search returns it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,6 +164,7 @@ pub struct CatalogEntry {
     /// letting the download fail with a 401.
     pub gated: bool,
     pub pipeline_tag: Option<String>,
+    pub trending_score: Option<f64>,
 }
 
 /// One downloadable file.
@@ -63,6 +190,142 @@ pub struct CatalogRepo {
     pub files: Vec<CatalogFile>,
     /// The base (unquantized) repository, from the card's `base_model` tag. Part of `h_M`.
     pub base_model: Option<String>,
+    pub entry: CatalogEntry,
+    pub architecture: Option<String>,
+    pub parameters: Option<u64>,
+    pub context_length: Option<u64>,
+    pub license: Option<String>,
+    pub variants: Vec<CatalogVariant>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelFormat {
+    Gguf,
+    Mlx,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CatalogVariant {
+    pub id: String,
+    pub format: ModelFormat,
+    pub label: String,
+    pub size: Option<u64>,
+    pub files: Vec<CatalogFile>,
+}
+
+pub(crate) fn split_repo(id: &str) -> Option<(&str, &str)> {
+    let (author, name) = id.split_once('/')?;
+    let valid = |part: &str| {
+        safe_component(part) && !part.starts_with('.') && part.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+    };
+    (valid(author) && valid(name)).then_some((author, name))
+}
+
+pub(crate) fn install_directory(root: &std::path::Path, repo: &str, variant: &str) -> Option<std::path::PathBuf> {
+    let (author, name) = split_repo(repo)?;
+    let folder =
+        if variant == "mlx" { "mlx".into() } else { format!("gguf-{}", &hex::encode(Sha256::digest(variant.as_bytes()))[..16]) };
+    Some(root.join(author).join(name).join(folder))
+}
+
+fn safe_component(component: &str) -> bool {
+    !component.is_empty()
+        && component != "."
+        && component != ".."
+        && !component.ends_with(['.', ' '])
+        && !component.chars().any(|ch| ch.is_control() || "<>:\"/\\|?*".contains(ch))
+}
+
+pub(crate) fn gguf_shard(path: &str) -> Option<(&str, u32, u32)> {
+    let (stem, extension) = path.rsplit_once('.')?;
+    if !extension.eq_ignore_ascii_case("gguf") {
+        return None;
+    }
+    indexed_shard(stem)
+}
+
+fn indexed_shard(stem: &str) -> Option<(&str, u32, u32)> {
+    let (prefix, total) = stem.rsplit_once("-of-")?;
+    let (prefix, part) = prefix.rsplit_once('-')?;
+    if total.len() != 5 || part.len() != 5 {
+        return None;
+    }
+    let (part, total) = (part.parse().ok()?, total.parse().ok()?);
+    (part > 0 && part <= total).then_some((prefix, part, total))
+}
+
+fn gguf_variants(files: &[CatalogFile]) -> Vec<CatalogVariant> {
+    let mut variants = Vec::new();
+    let mut groups = BTreeMap::<(&str, u32), BTreeMap<u32, CatalogFile>>::new();
+    for file in files {
+        let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+        let lower = name.to_ascii_lowercase();
+        if lower.starts_with("mmproj") || lower.starts_with("imatrix") {
+            continue;
+        }
+        if let Some((prefix, part, total)) = gguf_shard(&file.path) {
+            groups.entry((prefix, total)).or_default().insert(part, file.clone());
+        } else {
+            variants.push(gguf_variant(vec![file.clone()]));
+        }
+    }
+    for ((_, total), parts) in groups {
+        if parts.len() == total as usize {
+            variants.push(gguf_variant(parts.into_values().collect()));
+        }
+    }
+    variants.sort_by(|a, b| b.size.cmp(&a.size).then(a.id.cmp(&b.id)));
+    variants
+}
+
+fn gguf_variant(files: Vec<CatalogFile>) -> CatalogVariant {
+    let first = &files[0];
+    let label = first
+        .quantization
+        .as_ref()
+        .map(|q| q.label.clone())
+        .unwrap_or_else(|| first.path.rsplit('/').next().unwrap_or(&first.path).to_string());
+    CatalogVariant { id: first.path.clone(), format: ModelFormat::Gguf, label, size: total_size(&files), files }
+}
+
+fn mlx_variant(files: Vec<CatalogFile>, config: Option<&RawConfig>) -> Option<CatalogVariant> {
+    let files: Vec<_> = files
+        .into_iter()
+        .filter(|file| {
+            let path = file.path.as_str();
+            !path.starts_with('.')
+                && !path.contains('/')
+                && path.rsplit_once('.').is_some_and(|(_, ext)| {
+                    matches!(ext, "json" | "safetensors" | "model" | "txt" | "tiktoken" | "jinja" | "vocab" | "merges" | "spm")
+                })
+        })
+        .collect();
+    let weights: Vec<_> = files.iter().filter_map(|file| file.path.strip_suffix(".safetensors")).collect();
+    if weights.is_empty() || !files.iter().any(|file| file.path == "config.json") {
+        return None;
+    }
+    let mut shards = BTreeMap::new();
+    for weight in weights {
+        if let Some((prefix, part, total)) = indexed_shard(weight) {
+            shards.entry((prefix, total)).or_insert_with(std::collections::BTreeSet::new).insert(part);
+        }
+    }
+    if shards.iter().any(|((_, total), parts)| parts.len() != *total as usize) {
+        return None;
+    }
+    let bits = config.and_then(|c| c.quantization_config.as_ref().or(c.quantization.as_ref())).and_then(|quant| quant.bits);
+    Some(CatalogVariant {
+        id: "mlx".into(),
+        format: ModelFormat::Mlx,
+        label: bits.map_or_else(|| "MLX weights".into(), |bits| format!("{bits}-bit")),
+        size: total_size(&files),
+        files,
+    })
+}
+
+fn total_size(files: &[CatalogFile]) -> Option<u64> {
+    files.iter().try_fold(0u64, |sum, file| sum.checked_add(file.size?))
 }
 
 /// Hugging Face's HTTP API.
@@ -70,6 +333,8 @@ pub struct Catalog {
     endpoint: String,
     token: Option<String>,
     http: reqwest::Client,
+    searches: RequestCache<(String, usize, String, String), Vec<CatalogEntry>>,
+    repositories: RequestCache<(String, String), CatalogRepo>,
 }
 
 impl Catalog {
@@ -83,6 +348,8 @@ impl Catalog {
                 .user_agent(concat!("misaka-studio/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .expect("http client builds"),
+            searches: RequestCache::new(Duration::from_secs(30), 64),
+            repositories: RequestCache::new(Duration::from_secs(60), 32),
         }
     }
 
@@ -103,50 +370,100 @@ impl Catalog {
     /// search for "qwen" returns hundreds of PyTorch repositories that no local runtime here
     /// loads, and every one of them is a dead end the user has to learn to recognise.
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<CatalogEntry>> {
+        self.search_models(query, limit, SearchFormat::Gguf, SearchSort::Downloads).await
+    }
+
+    pub async fn search_models(&self, query: &str, limit: usize, format: SearchFormat, sort: SearchSort) -> Result<Vec<CatalogEntry>> {
+        let query = query.trim();
+        let limit = limit.clamp(1, 100);
+        let search = |format| self.search_format(query, limit, format, sort);
+        match format {
+            SearchFormat::Gguf => search("gguf").await,
+            SearchFormat::Mlx => search("mlx").await,
+            SearchFormat::All => {
+                let (gguf, mlx) = tokio::try_join!(search("gguf"), search("mlx"))?;
+                let mut seen = std::collections::HashSet::new();
+                let mut combined: Vec<_> = gguf
+                    .into_iter()
+                    .enumerate()
+                    .chain(mlx.into_iter().enumerate())
+                    .filter(|(_, item)| seen.insert(item.id.clone()))
+                    .collect();
+                match sort.field(query) {
+                    Some("downloads") => combined.sort_by_key(|(_, e)| std::cmp::Reverse(e.downloads)),
+                    Some("likes") => combined.sort_by_key(|(_, e)| std::cmp::Reverse(e.likes)),
+                    Some("lastModified") => combined.sort_by(|(_, a), (_, b)| b.last_modified.cmp(&a.last_modified)),
+                    Some("trendingScore") => combined.sort_by(|(_, a), (_, b)| {
+                        b.trending_score.unwrap_or_default().total_cmp(&a.trending_score.unwrap_or_default())
+                    }),
+                    _ => combined.sort_by_key(|(rank, _)| *rank),
+                }
+                Ok(combined.into_iter().take(limit).map(|(_, entry)| entry).collect())
+            }
+        }
+    }
+
+    async fn search_format(&self, query: &str, limit: usize, format: &str, sort: SearchSort) -> Result<Vec<CatalogEntry>> {
+        let key = (query.to_string(), limit, format.to_string(), format!("{sort:?}"));
+        self.searches.load(key, || self.fetch_search(query, limit, format, sort)).await
+    }
+
+    async fn fetch_search(&self, query: &str, limit: usize, format: &str, sort: SearchSort) -> Result<Vec<CatalogEntry>> {
         let url = format!("{}/api/models", self.endpoint);
-        let limit = limit.clamp(1, 100).to_string();
+        let limit = limit.to_string();
+        let mut params = vec![("filter", format), ("limit", limit.as_str())];
+        if let Some((author, name)) = split_repo(query) {
+            params.extend([("author", author), ("search", name)]);
+        } else if !query.is_empty() {
+            params.push(("search", query));
+        }
+        if let Some(field) = sort.field(query) {
+            params.extend([("sort", field), ("direction", "-1")]);
+        }
+        for field in ["tags", "gated", "downloads", "likes", "lastModified", "pipeline_tag", "trendingScore"] {
+            params.push(("expand[]", field));
+        }
         let response = self
-            .authorized(self.http.get(&url).query(&[
-                ("search", query),
-                ("filter", "gguf"),
-                ("sort", "downloads"),
-                ("direction", "-1"),
-                ("limit", &limit),
-            ]))
+            .authorized(self.http.get(&url).query(&params))
             .send()
             .await
             .map_err(|e| Error::Catalog { message: format!("{url}: {e}") })?;
 
         let response = check(response, &url).await?;
         let raw: Vec<RawModel> = decode(response, &url).await?;
-        Ok(raw.into_iter().filter_map(RawModel::into_entry).collect())
+        Ok(raw
+            .into_iter()
+            .filter_map(RawModel::into_entry)
+            .filter(|entry| format != "mlx" || entry.tags.iter().any(|tag| tag == "safetensors"))
+            .collect())
     }
 
     /// The files in a repository, at a revision (`main` by default).
     pub async fn repo(&self, repo_id: &str, revision: Option<&str>) -> Result<CatalogRepo> {
         let revision = revision.unwrap_or("main");
-        let info_url = format!("{}/api/models/{repo_id}/revision/{revision}", self.endpoint);
+        self.repositories.load((repo_id.to_string(), revision.to_string()), || self.fetch_repo(repo_id, revision)).await
+    }
+
+    async fn fetch_repo(&self, repo_id: &str, revision: &str) -> Result<CatalogRepo> {
+        let (author, name) =
+            split_repo(repo_id).ok_or_else(|| Error::bad_request("Expected a Hugging Face repository in author/model form"))?;
+        let info_url = self.url(["api", "models", author, name, "revision", revision])?;
         let response = self
-            .authorized(self.http.get(&info_url))
+            .authorized(self.http.get(info_url.clone()))
             .send()
             .await
             .map_err(|e| Error::Catalog { message: format!("{info_url}: {e}") })?;
-        let response = check(response, &info_url).await?;
-        let info: RawRepoInfo = decode(response, &info_url).await?;
+        let response = check(response, info_url.as_str()).await?;
+        let info: RawRepoInfo = decode(response, info_url.as_str()).await?;
 
-        let tree_url = format!("{}/api/models/{repo_id}/tree/{revision}", self.endpoint);
-        let response = self
-            .authorized(self.http.get(&tree_url).query(&[("recursive", "true")]))
-            .send()
-            .await
-            .map_err(|e| Error::Catalog { message: format!("{tree_url}: {e}") })?;
-        let response = check(response, &tree_url).await?;
-        let tree: Vec<RawTreeEntry> = decode(response, &tree_url).await?;
+        let pinned = info.sha.as_deref().unwrap_or(revision);
+        let tree = self.tree(author, name, pinned).await?;
+        let is_mlx = info.model.tags.iter().any(|tag| tag == "mlx") || info.library_name.as_deref() == Some("mlx");
 
-        let mut files: Vec<CatalogFile> = tree
+        let mut all_files: Vec<CatalogFile> = tree
             .into_iter()
             .filter(|e| e.kind.as_deref() != Some("directory"))
-            .filter(|e| e.path.to_ascii_lowercase().ends_with(".gguf"))
+            .filter(|e| e.path.split('/').all(safe_component))
             .map(|e| {
                 let quantization = misaka_studio_core::quant::Quantization::from_filename(&e.path);
                 CatalogFile {
@@ -161,20 +478,99 @@ impl Catalog {
             .collect();
         // Largest first: within one repository, size tracks quality, and the top of the list is
         // where someone with a big machine should be looking.
-        files.sort_by_key(|f| std::cmp::Reverse(f.size));
+        all_files.sort_by_key(|f| std::cmp::Reverse(f.size));
+        let files: Vec<_> = all_files.iter().filter(|f| f.path.to_ascii_lowercase().ends_with(".gguf")).cloned().collect();
+        let mut variants = gguf_variants(&files);
+        if is_mlx && let Some(variant) = mlx_variant(all_files, info.config.as_ref()) {
+            variants.push(variant);
+        }
+        let gguf = info.gguf.unwrap_or_default();
+        let config = info.config.unwrap_or_default();
+        let card = info.card_data.unwrap_or_default();
+        let entry = info.model.entry(repo_id.to_string());
 
         Ok(CatalogRepo {
-            id: repo_id.to_string(),
+            id: entry.id.clone(),
             revision: info.sha,
-            gated: info.gated.map(|g| g.is_gated()).unwrap_or(false),
-            base_model: info.card_data.and_then(|c| c.base_model.and_then(|b| b.first())),
+            gated: entry.gated,
+            base_model: card.base_model.and_then(BaseModel::first),
+            architecture: gguf.architecture.or(config.model_type),
+            parameters: gguf.total.or_else(|| info.safetensors.and_then(|t| t.total)),
+            context_length: gguf.context_length.or(config.max_position_embeddings),
+            license: card.license,
+            variants,
+            entry,
             files,
         })
     }
 
+    async fn tree(&self, author: &str, name: &str, revision: &str) -> Result<Vec<RawTreeEntry>> {
+        let mut url = self.url(["api", "models", author, name, "tree", revision])?;
+        url.query_pairs_mut().append_pair("recursive", "true");
+        let tree_path = url.path().to_string();
+        let mut entries = Vec::new();
+        for _ in 0..20 {
+            let response = self
+                .authorized(self.http.get(url.clone()))
+                .send()
+                .await
+                .map_err(|e| Error::Catalog { message: format!("{url}: {e}") })?;
+            let response = check(response, url.as_str()).await?;
+            let next = response
+                .headers()
+                .get(reqwest::header::LINK)
+                .and_then(|h| h.to_str().ok())
+                .and_then(|links| links.split(',').find(|link| link.contains("rel=\"next\"")))
+                .and_then(|link| link.trim().strip_prefix('<')?.split_once('>').map(|(href, _)| href))
+                .and_then(|href| url.join(href).ok())
+                .filter(|next| next.origin() == url.origin() && next.path() == tree_path && next != &url);
+            entries.extend(decode::<Vec<RawTreeEntry>>(response, url.as_str()).await?);
+            let Some(next) = next else { return Ok(entries) };
+            url = next;
+        }
+        Err(Error::Catalog { message: "The repository file list exceeds 20 pages".into() })
+    }
+
+    pub async fn readme(&self, repo_id: &str, revision: Option<&str>) -> Result<Option<String>> {
+        let (author, name) =
+            split_repo(repo_id).ok_or_else(|| Error::bad_request("Expected a Hugging Face repository in author/model form"))?;
+        let url = self.url([author, name, "resolve", revision.unwrap_or("main"), "README.md"])?;
+        let response =
+            self.authorized(self.http.get(url.clone())).send().await.map_err(|e| Error::Catalog { message: format!("{url}: {e}") })?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let mut response = check(response, url.as_str()).await?;
+        let mut text = Vec::new();
+        const MAX_README_BYTES: usize = 256 * 1024;
+        while let Some(chunk) = response.chunk().await.map_err(|e| Error::Catalog { message: format!("{url}: {e}") })? {
+            let take = (MAX_README_BYTES - text.len()).min(chunk.len());
+            text.extend_from_slice(&chunk[..take]);
+            if text.len() == MAX_README_BYTES {
+                break;
+            }
+        }
+        let text = String::from_utf8_lossy(&text);
+        let body = text
+            .strip_prefix("---\n")
+            .or_else(|| text.strip_prefix("---\r\n"))
+            .and_then(|card| card.split_once("\n---"))
+            .map_or(text.as_ref(), |(_, body)| body.trim_start());
+        Ok(Some(body.to_string()))
+    }
+
+    fn url<'a>(&self, segments: impl IntoIterator<Item = &'a str>) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&self.endpoint).map_err(|e| Error::Catalog { message: e.to_string() })?;
+        url.path_segments_mut()
+            .map_err(|_| Error::bad_request("Hugging Face endpoint must be an HTTP URL"))?
+            .pop_if_empty()
+            .extend(segments);
+        Ok(url)
+    }
+
     /// The URL a file is downloaded from.
     pub fn download_url(&self, repo_id: &str, revision: &str, path: &str) -> String {
-        format!("{}/{repo_id}/resolve/{revision}/{path}", self.endpoint)
+        self.url(repo_id.split('/').chain(["resolve", revision]).chain(path.split('/'))).map(|url| url.to_string()).unwrap_or_default()
     }
 
     pub fn token(&self) -> Option<&str> {
@@ -254,22 +650,29 @@ struct RawModel {
     gated: Option<Gated>,
     #[serde(default, rename = "pipeline_tag")]
     pipeline_tag: Option<String>,
+    #[serde(default, rename = "trendingScore")]
+    trending_score: Option<f64>,
 }
 
 impl RawModel {
     /// `None` for an entry carrying no identifier under either name: there is nothing to open and
     /// nothing to download, so it is dropped rather than allowed to fail the whole search.
     fn into_entry(self) -> Option<CatalogEntry> {
-        let id = self.id.or(self.model_id)?;
-        Some(CatalogEntry {
-            id,
+        let id = self.id.clone().or_else(|| self.model_id.clone())?;
+        Some(self.entry(id))
+    }
+
+    fn entry(self, fallback: String) -> CatalogEntry {
+        CatalogEntry {
+            id: self.id.or(self.model_id).unwrap_or(fallback),
             downloads: self.downloads,
             likes: self.likes,
             tags: self.tags,
             last_modified: self.last_modified,
             gated: self.gated.map(|g| g.is_gated()).unwrap_or(false),
             pipeline_tag: self.pipeline_tag,
-        })
+            trending_score: self.trending_score,
+        }
     }
 }
 
@@ -293,18 +696,48 @@ impl Gated {
 
 #[derive(Deserialize)]
 struct RawRepoInfo {
+    #[serde(flatten)]
+    model: RawModel,
     #[serde(default)]
     sha: Option<String>,
-    #[serde(default)]
-    gated: Option<Gated>,
     #[serde(default, rename = "cardData")]
     card_data: Option<RawCardData>,
+    gguf: Option<RawGguf>,
+    config: Option<RawConfig>,
+    safetensors: Option<RawWeights>,
+    library_name: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct RawCardData {
     #[serde(default)]
     base_model: Option<BaseModel>,
+    license: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct RawGguf {
+    architecture: Option<String>,
+    context_length: Option<u64>,
+    total: Option<u64>,
+}
+
+#[derive(Default, Deserialize)]
+struct RawConfig {
+    model_type: Option<String>,
+    max_position_embeddings: Option<u64>,
+    quantization_config: Option<RawQuantization>,
+    quantization: Option<RawQuantization>,
+}
+
+#[derive(Deserialize)]
+struct RawQuantization {
+    bits: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RawWeights {
+    total: Option<u64>,
 }
 
 /// `base_model` is a string in most cards and a list in merges.
@@ -348,6 +781,155 @@ mod tests {
     use super::*;
     use axum::Json;
     use axum::routing::get;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[tokio::test]
+    async fn concurrent_requests_share_a_result_and_failures_do_not_become_a_negative_cache() {
+        let cache = Arc::new(RequestCache::new(Duration::from_secs(30), 4));
+        let calls = Arc::new(AtomicU64::new(0));
+        let mut requests = Vec::new();
+        for _ in 0..100 {
+            let cache = cache.clone();
+            let calls = calls.clone();
+            requests.push(tokio::spawn(async move {
+                cache
+                    .load("same", || async {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        Err::<u64, _>(Error::Catalog { message: "temporary outage".into() })
+                    })
+                    .await
+            }));
+        }
+        for request in requests {
+            assert!(request.await.unwrap().unwrap_err().to_string().contains("temporary outage"));
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let value = cache
+            .load("same", || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(42)
+            })
+            .await
+            .unwrap();
+        assert_eq!(value, 42);
+        assert_eq!(calls.load(Ordering::Relaxed), 2, "a later request can recover immediately");
+    }
+
+    #[tokio::test]
+    async fn cancelled_initializers_do_not_leave_other_callers_waiting_forever() {
+        let cache = Arc::new(RequestCache::new(Duration::from_secs(30), 4));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let first_cache = cache.clone();
+        let first = tokio::spawn(async move {
+            first_cache
+                .load("same", || async {
+                    let _ = started.send(());
+                    std::future::pending::<Result<u64>>().await
+                })
+                .await
+        });
+        ready.await.unwrap();
+        let next_cache = cache.clone();
+        let next = tokio::spawn(async move { next_cache.load("same", || async { Ok(7) }).await });
+        tokio::task::yield_now().await;
+        first.abort();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), next).await.unwrap().unwrap().unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn successful_entries_expire_and_least_recently_used_entries_are_bounded() {
+        let cache = RequestCache::new(Duration::from_secs(30), 2);
+        assert_eq!(cache.load(1, || async { Ok(11) }).await.unwrap(), 11);
+        assert_eq!(cache.load(2, || async { Ok(22) }).await.unwrap(), 22);
+        assert_eq!(cache.load(1, || async { panic!("fresh result is reused") }).await.unwrap(), 11);
+        cache.load(3, || async { Ok(33) }).await.unwrap();
+        assert_eq!(cache.entries.lock().await.len(), 2);
+        assert!(cache.entries.lock().await.contains_key(&1));
+        assert!(!cache.entries.lock().await.contains_key(&2));
+        cache.entries.lock().await.get_mut(&1).unwrap().at = Instant::now() - Duration::from_secs(31);
+        assert_eq!(cache.load(1, || async { Ok(44) }).await.unwrap(), 44, "expired entries fetch again");
+    }
+
+    async fn counting_hub() -> (String, Arc<AtomicU64>, Arc<std::sync::Mutex<Vec<String>>>) {
+        let calls = Arc::new(AtomicU64::new(0));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let search_calls = calls.clone();
+        let search_seen = seen.clone();
+        let tree_calls = calls.clone();
+        let tree_seen = seen.clone();
+        let app = axum::Router::new()
+            .route(
+                "/api/models",
+                get(move |headers: axum::http::HeaderMap| {
+                    let calls = search_calls.clone();
+                    let seen = search_seen.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        seen.lock().unwrap().push(
+                            headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or("anonymous").to_string(),
+                        );
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        Json(serde_json::json!([{ "id": "org/model", "gated": false }]))
+                    }
+                }),
+            )
+            .route(
+                "/api/models/{*rest}",
+                get(move |axum::extract::Path(rest): axum::extract::Path<String>| {
+                    let calls = tree_calls.clone();
+                    let seen = tree_seen.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        seen.lock().unwrap().push(rest.clone());
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        Json(if rest.contains("/tree/") {
+                            serde_json::json!([{ "type": "file", "path": "model.gguf", "size": 64 }])
+                        } else {
+                            serde_json::json!({ "sha": "immutable-commit", "gated": false })
+                        })
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{address}"), calls, seen)
+    }
+
+    #[tokio::test]
+    async fn actual_search_http_is_reused_without_crossing_limits_or_credentials() {
+        let (endpoint, calls, seen) = counting_hub().await;
+        let catalog = Catalog::new(&endpoint, Some("fixture-token-a".into()));
+        for _ in 0..10 {
+            assert_eq!(catalog.search("model", 20).await.unwrap().len(), 1);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        catalog.search("model", 100).await.unwrap();
+        catalog.search("model", 1000).await.unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2, "the normalized limit is part of the cache key");
+        Catalog::new(&endpoint, Some("fixture-token-b".into())).search("model", 20).await.unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(seen.lock().unwrap().last().map(String::as_str), Some("Bearer fixture-token-b"));
+    }
+
+    #[tokio::test]
+    async fn simultaneous_repo_http_calls_share_two_requests_and_pin_the_tree_revision() {
+        let (endpoint, calls, seen) = counting_hub().await;
+        let catalog = Arc::new(Catalog::new(endpoint, None));
+        let mut requests = Vec::new();
+        for _ in 0..100 {
+            let catalog = catalog.clone();
+            requests.push(tokio::spawn(async move { catalog.repo("org/model", None).await.unwrap() }));
+        }
+        for request in requests {
+            assert_eq!(request.await.unwrap().revision.as_deref(), Some("immutable-commit"));
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(*seen.lock().unwrap(), vec!["org/model/revision/main", "org/model/tree/immutable-commit"]);
+    }
 
     /// A stand-in for the Hugging Face API, so the catalog is tested against HTTP rather than
     /// against a mocked client — the wire shapes are exactly what this module gets wrong.
@@ -439,6 +1021,36 @@ mod tests {
         assert_eq!(repo.files[0].size, Some(4_300_000_000));
         assert_eq!(repo.files[0].sha256.as_deref(), Some("bb22"));
         assert_eq!(repo.files[1].quantization.as_ref().expect("quant").label, "Q4_K_M");
+    }
+
+    #[test]
+    fn only_complete_weight_sets_are_download_options() {
+        let file = |path: &str, size| CatalogFile {
+            path: path.into(),
+            size: Some(size),
+            sha256: None,
+            quantization: misaka_studio_core::quant::Quantization::from_filename(path),
+        };
+        let files = [
+            file("Q4/example-Q4_K_M-00002-of-00002.gguf", 2),
+            file("Q4/example-Q4_K_M-00001-of-00002.gguf", 4),
+            file("Q8/example-Q8_0-00001-of-00002.gguf", 7),
+            file("mmproj-example.gguf", 1),
+            file("imatrix_clean.gguf", 1),
+        ];
+        let choices = gguf_variants(&files);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].label, "Q4_K_M");
+        assert_eq!(choices[0].files[0].path, files[1].path);
+        assert_eq!(choices[0].size, Some(6));
+
+        let mut mlx = vec![file("config.json", 1), file("model-00001-of-00002.safetensors", 2)];
+        assert!(mlx_variant(mlx.clone(), None).is_none());
+        mlx.push(file("model-00002-of-00002.safetensors", 2));
+        mlx.push(file("tokenizer.json", 3));
+        let option = mlx_variant(mlx, None).unwrap();
+        assert_eq!(option.files.len(), 4);
+        assert_eq!(option.size, Some(8));
     }
 
     #[tokio::test]

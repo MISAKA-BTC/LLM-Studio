@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "label": "phase2",
+  "measuredAt": "2026-11-24T07:09:48.065Z",
+  "environment": {
+    "node": "v24.22.3",
+    "react": "19.2.8",
+    "jsdom": "26.1.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD EPYC 9V74 80-Core Processor"
+  },
+  "methodology": {
+    "fixture": "1000 conversations; active conversation has 1000 alternating user/assistant messages, other conversations have one user message. Assistant content has a heading, bold text and link. All history remains in the store.",
+    "fixtureSha256": "799d6b4689fde07c06c346cc753051d9c20cff5bf159df037e04a9ef3778599f",
+    "execution": "Actual App and stores, Vite module bundle, React.StrictMode, fresh jsdom process. Source bundling is outside the reported time. Bootstrap and persistence are stubbed; the status-poll API and EventSource are mocked.",
+    "geometry": "Synthetic transcript clientHeight 600, clientWidth 760; virtual sidebar clientHeight 480. ResizeObserver reports no measurements; jsdom has no CSS layout, paint or native scrolling.",
+    "markdown": "No Web Worker in jsdom. Phase 2 uses its idle asynchronous fallback; count taken after visible Markdown finishes.",
+    "timing": "One observation of Node/jsdom React mount + lazy imports + asynchronous formatting + 20ms settle polling. Not browser startup time, input latency, animation FPS or a statistically estimated speedup.",
+    "count": "Element counts include actual mounted DOM. No CSS visibility approximation is used; active transcript is identified by data-transcript-active. The new shell can add fixed elements while lists remove offscreen rows."
+  },
+  "counts": {
+    "conversationsInStore": 1000,
+    "messagesInActiveConversation": 1000,
+    "sidebarThreadRows": 20,
+    "mountedActiveMessages": 10,
+    "mountedAllMessages": 10,
+    "virtualTranscriptRows": 10,
+    "activeTranscriptElements": 185,
+    "totalAppElements": 680,
+    "formattedMarkdownBlocks": 5,
+    "pendingMarkdownBlocks": 0
+  },
+  "nodeJsdomMountAndSettleMs": 483.935,
+  "mockedRequests": [
+    "/api/v1/network/prompt-stack",
+    "/api/v1/network/prompt-stack"
+  ],
+  "sourceHashes": {
+    "src/App.tsx": "bd48ca64ddf17afab9c52c4a293e786c22582e836398766e0d275fd9b8f5d2e9",
+    "src/components/Sidebar.tsx": "74182816908d22c5e4abc581781106d6d8d5d49ea1cbb0034314358ab70e3c72",
+    "src/components/ChatView.tsx": "3b6df3f6edf654d17e36445c4fe5b9ea674cb2eb2637f64827a02dbf8d314f0a",
+    "src/components/Markdown.tsx": "29e9bf81efe19a491bb2bfde3d33c0994bfffc22638c077e12b18f6b67c710ad",
+    "src/components/chat/TranscriptCache.tsx": "02422548c12931c10ba2c49a67bae96ffad43e27bda586eb566b9e14399e4e93",
+    "src/components/chat/VirtualTranscript.tsx": "d546a9047f6147a0687653c226cf715e51aeb32e61a886ef0f071e9e0c99a7b8"
+  },
+  "scriptSha256": "7940af2b187396e109ce77aeca74f947d22c623d5f0460f676453f2fc11dbcb6"
+}

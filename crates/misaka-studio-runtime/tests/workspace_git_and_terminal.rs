@@ -205,6 +205,26 @@ fn row(path: &str, status: &str, xy: &str, added: Value, removed: Value, binary:
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn git_summary_is_explicit_and_default_status_still_includes_counts() {
+    if !have_git() {
+        return;
+    }
+    let studio = studio().await;
+    let repo = changed_repository();
+    let root = repo.path().to_str().unwrap();
+    let (code, summary) = studio.post("git/status", json!({ "root": root, "include_counts": false })).await;
+    assert_eq!(code, 200);
+    assert_eq!(summary["counts_included"], false);
+    assert!(summary["files"].as_array().unwrap().len() > 4);
+    assert!(summary["files"].as_array().unwrap().iter().all(|file| file["added"].is_null() && file["removed"].is_null()));
+    let (code, complete) = studio.post("git/status", json!({ "root": root })).await;
+    assert_eq!(code, 200);
+    assert!(complete.get("counts_included").is_none());
+    assert!(complete["added"].as_u64().unwrap() > 0);
+    assert_eq!(summary["files"].as_array().unwrap().len(), complete["files"].as_array().unwrap().len());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn git_status_lists_every_kind_of_change_with_line_counts() {
     if !have_git() {
         return;

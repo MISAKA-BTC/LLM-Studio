@@ -8,7 +8,7 @@
 // the conversations live.
 
 import { create } from 'zustand'
-import { isDuplicate, readAttachment } from '../../lib/attachments'
+import { isDuplicate, readAttachment, type ReadableFile } from '../../lib/attachments'
 import type { Attachment } from '../../lib/types'
 import { useStudio } from '../../store/studio'
 import { useUi, type AppMode } from '../../store/ui'
@@ -81,7 +81,7 @@ export function useDraft(key: string): Draft {
  * Read files into a thread's draft: the paperclip, a drop, a paste. A file that cannot be attached
  * is said once, in a toast that clears itself — it is not an error, the file is simply not text.
  */
-export async function attachFiles(key: string, files: File[]): Promise<void> {
+export async function attachFiles(key: string, files: ReadableFile[]): Promise<void> {
   const toast = useStudio.getState().toast
   const read: Attachment[] = []
   for (const file of files) {

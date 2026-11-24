@@ -1,8 +1,8 @@
 //! LLM Studio — the desktop shell.
 //!
 //! A native window over the same UI bundle the runtime serves, with the runtime itself supervised
-//! as a child process. The window is a client of `http://127.0.0.1:<port>`; there is no private
-//! bridge between them, which is what keeps the public API honest.
+//! as a child process. All communication with the runtime uses its public API at
+//! `http://127.0.0.1:<port>`. The shell forwards native file and folder drops to the UI.
 //!
 //! # What it does before the window opens
 //!
@@ -17,6 +17,8 @@
 //! window; one this shell started must not outlive it holding 20 GB of VRAM.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod file_drop;
 
 use misaka_studio_desktop::{RuntimeSource, api_base_script, configured_port, health_check, locate_runtime_binary, resolve_runtime};
 use std::path::PathBuf;
@@ -91,14 +93,16 @@ fn main() {
             // initialization script below still names the base for any build that does load local
             // assets.
             let window_url = base_url.parse().map(WebviewUrl::External).unwrap_or_else(|_| WebviewUrl::default());
-            WebviewWindowBuilder::new(app, "main", window_url)
+            let window = WebviewWindowBuilder::new(app, "main", window_url)
                 .title(app.package_info().name.as_str())
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(880.0, 600.0)
                 // Injected before the app's own bundle runs, so `window.__MISAKA_STUDIO_API__` is
                 // set by the time the first request is made.
                 .initialization_script(api_base_script(&base_url))
+                .initialization_script("window.__MISAKA_STUDIO_NATIVE_DROP__ = true")
                 .build()?;
+            file_drop::listen(&window, &base_url);
             Ok(())
         })
         .build(tauri::generate_context!())

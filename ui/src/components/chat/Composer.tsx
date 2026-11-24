@@ -118,6 +118,7 @@ export const Composer = memo(function Composer({
   /** The text a menu was dismissed at: it stays shut until the text changes. */
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const [mentionResults, setMentionResults] = useState<{ query: string; paths: string[]; error: string | null } | null>(null)
+  const lastFocus = useRef<{ tick: number; key: string } | null>(null)
 
   const mode: ConversationMode = conversation ? (conversation.mode ?? 'chat') : side === 'code' ? 'agent' : 'chat'
   // Before the session exists, `@` searches the folder it will be made in.
@@ -135,12 +136,16 @@ export const Composer = memo(function Composer({
   // --- focus and drafts from elsewhere ---------------------------------------------------------
 
   useEffect(() => {
+    // Activity resumes effects when a view is revealed. Only an actual focus request or thread
+    // change should move the caret; returning from Settings must preserve an in-progress edit.
+    if (lastFocus.current?.tick === focusTick && lastFocus.current.key === key) return
     const element = textarea.current
     if (!element) return
+    lastFocus.current = { tick: focusTick, key }
     element.focus({ preventScroll: true })
     const end = element.value.length
     element.setSelectionRange(end, end)
-  }, [focusTick, conversation?.id])
+  }, [focusTick, key])
 
   useEffect(() => {
     if (!composerDraft || composerDraft.tick === loadedDraftTick) return
@@ -319,10 +324,11 @@ export const Composer = memo(function Composer({
       return
     }
     let current = true
+    const controller = new AbortController()
     // Debounced: a request per keystroke would outrun the walk of a large tree.
     const timer = setTimeout(async () => {
       try {
-        const { paths } = await api.workspace.files(workspace, mentionQuery, 50)
+        const { paths } = await api.workspace.files(workspace, mentionQuery, 50, controller.signal, { cache: true })
         if (current) setMentionResults({ query: mentionQuery, paths, error: null })
       } catch {
         // The runtime may predate the workspace endpoints. Quietly: the menu says it, nothing else.
@@ -331,6 +337,7 @@ export const Composer = memo(function Composer({
     }, 120)
     return () => {
       current = false
+      controller.abort()
       clearTimeout(timer)
     }
   }, [mentionQuery, workspace])

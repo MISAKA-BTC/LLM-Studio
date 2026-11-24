@@ -15,25 +15,39 @@
 // `chat/composerStore`, per thread, so nothing typed is lost when it moves or when someone looks at
 // another thread and comes back.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { startAgentRun, stopAgentRun, useAgent } from '../lib/agent/run'
+import { useFileDrop } from '../lib/fileDrop'
 import type { ChatMessage, Conversation } from '../lib/types'
-import { useStudio, type StreamingReply } from '../store/studio'
+import { useStudio } from '../store/studio'
 import { useUi } from '../store/ui'
 import { Icon } from './common'
-import { useCodeWatchers } from './code/watchers'
 import { ChatHeader } from './chat/ChatHeader'
 import { Composer } from './chat/Composer'
 import { attachFiles, draftKey } from './chat/composerStore'
 import { EmptyHero } from './chat/EmptyHero'
 import { busyConversation, useSendingIn } from './chat/followUps'
-import { Message, type LiveStream, type TranscriptActions } from './chat/Message'
+import type { TranscriptActions } from './chat/Message'
 import { ParametersDrawer } from './chat/ParametersDrawer'
 import { RightPanel } from './chat/RightPanel'
+import { TranscriptCache, type TranscriptSnapshot } from './chat/TranscriptCache'
+import type { TranscriptHandle, TranscriptScroll } from './chat/VirtualTranscript'
 
 const NO_MESSAGES: ChatMessage[] = []
 /** scrollTop may be fractional while the scroll height is rounded. */
 const BOTTOM_EPSILON_PX = 2
+type ScrollPosition = { top: number; following: boolean; atBottom: boolean; anchor?: { id: string; offset: number } }
+// Reading positions outlive the three recently mounted transcripts. Bound this lightweight
+// per-window history too, so opening many threads cannot retain unbounded UI state.
+const scrollPositions = new Map<string, ScrollPosition>()
+const MAX_SCROLL_POSITIONS = 128
+
+function rememberScroll(key: string, position: ScrollPosition): void {
+  const previous = scrollPositions.get(key)
+  scrollPositions.delete(key)
+  scrollPositions.set(key, { ...previous, ...position })
+  if (scrollPositions.size > MAX_SCROLL_POSITIONS) scrollPositions.delete(scrollPositions.keys().next().value!)
+}
 
 /**
  * Whether another thread holds the engine. There is one live overlay and one request in flight; a
@@ -53,63 +67,81 @@ function lastTypedIndex(messages: ChatMessage[]): number {
   return -1
 }
 
-function liveOf(stream: StreamingReply): LiveStream {
-  return { reasoning: stream.reasoning, startedAt: stream.startedAt, answerStartedAt: stream.answerStartedAt }
-}
-
 export function ChatView() {
   const conversation = useStudio((s) => s.conversations.find((c) => c.id === s.activeConversationId) ?? null)
-  const streaming = useStudio((s) => s.streaming)
-  const agentRun = useAgent((s) => s.run)
+  // The window only needs the live row's identity. Its text is subscribed to by that row alone.
+  const streamingId = useStudio((s) => s.streaming?.conversationId === s.activeConversationId ? s.streaming.assistantId : null)
+  const agentRunIn = useAgent((s) => s.run?.conversationId ?? null)
+  const pendingApproval = useAgent((s) => s.pendingApproval)
   const sendingIn = useSendingIn()
+  const appMode = useUi((s) => s.appMode)
+  const threadKey = draftKey(conversation?.id, appMode)
 
   const messages = conversation?.messages ?? NO_MESSAGES
-  const activeStream = conversation && streaming?.conversationId === conversation.id ? streaming : null
   // The pending reply is a render-only overlay. It joins the transcript exactly once, when the
   // request ends, and therefore can never leak an incomplete answer into the next model request.
-  const visibleMessages = activeStream
-    ? messages.some((m) => m.id === activeStream.assistantId)
-      ? messages.map((m) => (m.id === activeStream.assistantId ? { ...m, content: activeStream.content, streaming: true } : m))
-      : [...messages, { id: activeStream.assistantId, role: 'assistant' as const, content: activeStream.content, streaming: true }]
-    : messages
-  // A tool result is history the agent sends back to the model, not something the person wrote.
-  const rows = visibleMessages.filter((m) => m.role !== 'system' && !(m.role === 'user' && m.toolResults))
+  const rows = useMemo(() => {
+    // A tool result is history the agent sends back to the model, not something the person wrote.
+    const visibleMessages = messages.filter((m) => m.role !== 'system' && !(m.role === 'user' && m.toolResults))
+    return streamingId && !visibleMessages.some((m) => m.id === streamingId)
+      ? [...visibleMessages, { id: streamingId, role: 'assistant' as const, content: '', streaming: true }]
+      : visibleMessages
+  }, [messages, streamingId])
   const agent = conversation?.mode === 'agent'
-  const generating = activeStream !== null || (conversation !== null && (agentRun?.conversationId === conversation.id || sendingIn === conversation.id))
+  const generating = streamingId !== null || (conversation !== null && (agentRunIn === conversation.id || sendingIn === conversation.id))
   const empty = rows.length === 0
-
-  // A Code session's git status and panes follow what its agent and the window do.
-  useCodeWatchers(conversation)
+  const approvalMessage = useMemo(() => pendingApproval ? rows.find((message) => message.toolCalls?.some((call) => call.id === pendingApproval)) : undefined, [rows, pendingApproval])
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
   const lastScrollTop = useRef(0)
   const [atBottom, setAtBottom] = useState(true)
+  const atBottomRef = useRef(true)
+  const lastThreadKey = useRef<string | null>(null)
+  const transcriptHandle = useRef<TranscriptHandle | null>(null)
+  const transcriptScroll = useMemo<TranscriptScroll>(() => ({
+    element: scrollRef,
+    following: followRef,
+    lastTop: lastScrollTop,
+    handle: transcriptHandle,
+    saved: (key) => scrollPositions.get(key),
+    record: (key, position) => {
+      const element = scrollRef.current
+      rememberScroll(key, { ...position, atBottom: element ? element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_EPSILON_PX : position.following })
+    },
+  }), [])
 
   // The latest of what the transcript's actions read — so the actions themselves never change and
   // a memoised message is not redrawn for every token of the reply below it.
   const latest = useRef({ conversation, generating })
   latest.current = { conversation, generating }
 
-  // A thread opens at its end, following.
+  // A first visit follows the end. Returning to a thread (or revealing this Activity) restores
+  // the reading position instead of rerunning a mount effect that jumps to the latest reply.
   useLayoutEffect(() => {
-    followRef.current = true
-    setAtBottom(true)
-    setEditingId(null)
-  }, [conversation?.id])
-
-  // Follow the stream only while the user is at the bottom.
-  useLayoutEffect(() => {
+    const saved = scrollPositions.get(threadKey)
+    followRef.current = saved?.following ?? true
+    atBottomRef.current = saved?.atBottom ?? true
+    setAtBottom(atBottomRef.current)
+    if (lastThreadKey.current !== threadKey) setEditingId(null)
+    lastThreadKey.current = threadKey
     const element = scrollRef.current
-    if (!element || !followRef.current) return
-    element.scrollTop = element.scrollHeight
-    lastScrollTop.current = element.scrollTop
-  }, [conversation?.id, messages, activeStream?.content, activeStream?.reasoning])
+    if (element && empty) {
+      element.scrollTop = followRef.current ? element.scrollHeight : saved?.top ?? 0
+      lastScrollTop.current = element.scrollTop
+    }
+    return () => rememberScroll(threadKey, {
+      top: lastScrollTop.current,
+      following: followRef.current,
+      atBottom: atBottomRef.current,
+    })
+  }, [threadKey])
 
-  // Things that change height without changing the messages — a composer growing, a reply's final
-  // render with its math, a reasoning block folding — keep a following view at the bottom too.
+  // The virtual transcript follows measured row heights itself; the empty hero only needs to
+  // follow its composer as it grows. Neither path subscribes this component to token text.
   useEffect(() => {
+    if (!empty) return
     const element = scrollRef.current
     if (!element) return
     const observer = new ResizeObserver(() => {
@@ -118,7 +150,9 @@ export function ChatView() {
       lastScrollTop.current = element.scrollTop
     })
     observer.observe(element)
-    if (element.firstElementChild) observer.observe(element.firstElementChild)
+    // The cache has one wrapper whose height follows its visible transcript. When empty, the
+    // hero is its sibling; observe both so keeping hidden transcripts cannot break auto-scroll.
+    for (const child of element.children) observer.observe(child)
     return () => observer.disconnect()
   }, [conversation?.id, empty])
 
@@ -130,6 +164,7 @@ export function ChatView() {
     const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_EPSILON_PX
     if (!bottom || delta < 0) followRef.current = false
     else if (delta > 0) followRef.current = true
+    atBottomRef.current = bottom
     setAtBottom(bottom)
   }
 
@@ -137,8 +172,10 @@ export function ChatView() {
     const element = scrollRef.current
     if (!element) return
     followRef.current = true
-    element.scrollTop = element.scrollHeight
+    if (transcriptHandle.current) transcriptHandle.current.scrollToEnd()
+    else element.scrollTop = element.scrollHeight
     lastScrollTop.current = element.scrollTop
+    atBottomRef.current = true
     setAtBottom(true)
   }
 
@@ -209,6 +246,8 @@ export function ChatView() {
     }
   }, [])
 
+  const transcript = useMemo<TranscriptSnapshot>(() => ({ rows, agent, generating, editingId, actions }), [rows, agent, generating, editingId, actions])
+
   // ↑ in an empty composer: edit the last thing the person wrote.
   const editLast = useCallback(() => {
     const { conversation: thread, generating: busy } = latest.current
@@ -216,84 +255,50 @@ export function ChatView() {
     const last = thread.messages[lastTypedIndex(thread.messages)]
     if (!last) return
     setEditingId(last.id)
-    requestAnimationFrame(() => document.getElementById(`message-${last.id}`)?.scrollIntoView({ block: 'nearest' }))
+    transcriptHandle.current?.scrollToMessage(last.id)
   }, [])
 
   // --- files dropped anywhere on the chat go to the composer --------------------------------------
 
-  const dragDepth = useRef(0)
-  const [dragging, setDragging] = useState(false)
-  const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files')
-  const dropHandlers = {
-    onDragEnter: (event: DragEvent) => {
-      if (!carriesFiles(event)) return
-      event.preventDefault()
-      dragDepth.current += 1
-      setDragging(true)
-    },
-    onDragOver: (event: DragEvent) => {
-      if (!carriesFiles(event)) return
-      event.preventDefault()
-      event.dataTransfer.dropEffect = 'copy'
-    },
-    onDragLeave: (event: DragEvent) => {
-      if (!carriesFiles(event)) return
-      dragDepth.current = Math.max(0, dragDepth.current - 1)
-      if (dragDepth.current === 0) setDragging(false)
-    },
-    onDrop: (event: DragEvent) => {
-      if (!carriesFiles(event)) return
-      event.preventDefault()
-      dragDepth.current = 0
-      setDragging(false)
-      const files = Array.from(event.dataTransfer.files)
-      if (files.length) void attachFiles(draftKey(conversation?.id), files)
+  const { dragging, dropHandlers, dropRef } = useFileDrop({
+    kind: 'text',
+    onFiles: (files) => {
+      void attachFiles(threadKey, files)
       useUi.getState().focusComposer()
     },
-  }
+  })
 
   return (
     <div className="relative flex h-full min-w-0 bg-ink-50 dark:bg-ink-950">
-      <div className="relative flex min-w-0 flex-1 flex-col" {...dropHandlers}>
+      <div ref={dropRef} className="relative flex min-w-0 flex-1 flex-col" {...dropHandlers}>
         <ChatHeader conversation={conversation} generating={generating} />
         <ParametersDrawer />
 
         <div className="relative min-h-0 flex-1">
-          <div ref={scrollRef} onScroll={onScroll} onWheelCapture={(event) => {
+          <div ref={scrollRef} data-transcript-scroll onScroll={onScroll} onWheelCapture={(event) => {
             // Wheel input arrives before the scroll event, so the next token cannot undo it.
             if (event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight) {
               followRef.current = false
             }
-          }} className="h-full overflow-y-auto">
-            {empty ? (
+          }} className="h-full overflow-y-auto" style={{ overflowAnchor: 'none' }}>
+            <TranscriptCache threadKey={threadKey} active={!empty} snapshot={transcript} scroll={transcriptScroll} />
+            {empty && (
               <EmptyHero conversation={conversation}>
                 <Composer conversation={conversation} variant="hero" onSend={follow} />
               </EmptyHero>
-            ) : (
-              <div className="mx-auto w-full max-w-[760px] px-4 pb-6 pt-6">
-                {rows.map((message, index) => {
-                  const previous = rows[index - 1]
-                  const reply = message.role !== 'user'
-                  const continuing = reply && previous !== undefined && previous.role !== 'user'
-                  return (
-                    // Every message reserves its action row below it, and that row is most of the gap.
-                    <div key={message.id} className={index === 0 ? '' : continuing ? 'mt-1' : 'mt-3'}>
-                      <Message
-                        message={message}
-                        agent={agent || !!message.toolCalls?.length}
-                        last={index === rows.length - 1}
-                        generating={generating}
-                        editing={editingId === message.id}
-                        live={activeStream && message.id === activeStream.assistantId ? liveOf(activeStream) : null}
-                        showAvatar={reply && !continuing}
-                        actions={actions}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
             )}
           </div>
+
+          {approvalMessage && pendingApproval && (
+            <button
+              type="button"
+              className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
+              onClick={() => transcriptHandle.current?.scrollToMessage(approvalMessage.id, pendingApproval)}
+            >
+              <Icon name="shield" className="size-3.5" />
+              Review pending approval
+            </button>
+          )}
 
           {!empty && (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-ink-50 dark:from-ink-950" aria-hidden />

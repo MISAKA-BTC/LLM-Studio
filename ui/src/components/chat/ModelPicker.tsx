@@ -122,7 +122,7 @@ export function ModelPickerPanel({ close, contextOnly = false }: { close: () => 
       {!contextOnly && <div ref={list} className="min-h-0 flex-1 overflow-y-auto p-1" role="listbox" aria-label="Installed models">
         {models.length === 0 && (
           <p className="px-2.5 py-3 text-xs text-ink-500 dark:text-ink-400">
-            No models are installed yet. <strong>Models → Discover</strong> finds one on Hugging Face, and says what fits this machine
+            No models are installed yet. <strong>Models → Model Search</strong> finds one on Hugging Face, and says what fits this machine
             before anything downloads.
           </p>
         )}
@@ -149,7 +149,7 @@ export function ModelPickerPanel({ close, contextOnly = false }: { close: () => 
                 {selected ? <Icon name="check" className="size-3.5 text-arc-600 dark:text-arc-400" /> : loading ? <Spinner className="size-3.5 text-arc-600" /> : null}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium text-ink-800 dark:text-ink-100">{model.id}</span>
+                <span className="block truncate font-medium text-ink-800 dark:text-ink-100">{model.name}</span>
                 <span className="mt-1 flex flex-wrap items-center gap-1 text-[0.65rem] text-ink-500 dark:text-ink-400">
                   <QuantBadge quantization={model.quantization} architecture={model.architecture} />
                   <span>{bytes(model.size_bytes)}</span>

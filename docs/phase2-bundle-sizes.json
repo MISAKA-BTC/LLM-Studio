@@ -1,0 +1,150 @@
+{
+  "measurement": {
+    "units": "bytes (decimal kB = bytes / 1000)",
+    "scope": "The main script selected by dist/index.html, plus ChatView and recursively followed static ESM imports/re-exports, deduplicated by asset path.",
+    "method": "Read generated JavaScript with the Rollup AST parser. Static ImportDeclaration and export source references form the graph. Dynamic ImportExpression references are recorded separately. Inspect source maps to identify parser/KaTeX/grammar modules.",
+    "gzip": "Sum of gzipSync(buffer).length for each individual asset, using Node defaults. Not a gzip of the concatenated graph.",
+    "excluded": [
+      "Worker scripts and their dependencies",
+      "Dynamic math and compatibility-parser imports",
+      "CSS, fonts, images, source maps",
+      "Browser parse/evaluation/paint time and interaction latency"
+    ],
+    "caveat": "This measures JavaScript in the main-thread static dependency graph. It is not total build size, total network transfer, or a speed benchmark. Code split into workers can increase the sum of all build artifacts."
+  },
+  "phases": [
+    {
+      "name": "phase1",
+      "main_entry": "assets/index-B00IAMEb.js",
+      "chat_chunk": "assets/ChatView-CivPJ7MC.js",
+      "static_graph": {
+        "assets": [
+          {
+            "file": "assets/index-B00IAMEb.js",
+            "bytes": 436592,
+            "gzip_bytes": 140818,
+            "sha256": "2713ff32d77d79706206642b13b74561a6fdcc7af3da1f47cc7655a26a3e5b44"
+          },
+          {
+            "file": "assets/ChatView-CivPJ7MC.js",
+            "bytes": 793170,
+            "gzip_bytes": 236560,
+            "sha256": "c36c23cd61fc9d89758973e44da7ade7c87a6390da0a8e805a1adcdbb4e85fc4"
+          },
+          {
+            "file": "assets/MiningCatalog-C5FGOVJ9.js",
+            "bytes": 15097,
+            "gzip_bytes": 4538,
+            "sha256": "b2f108eabba0f3ae3002d10fd97045ccebc174c08cbb37c12500f4e886c7b264"
+          },
+          {
+            "file": "assets/MiningQueuePanel-8ckBpJmw.js",
+            "bytes": 4287,
+            "gzip_bytes": 1709,
+            "sha256": "5f9375cd6d4656797614d6f9c637b3e7a4e0dcc574573163e98729a1e651b73d"
+          }
+        ],
+        "bytes": 1249146,
+        "gzip_bytes": 383625
+      },
+      "worker_assets": [
+        {
+          "file": "assets/highlight.worker-BP-w6Cke.js",
+          "bytes": 165317,
+          "gzip_bytes": 55004,
+          "sha256": "d28a5ffe7a8f16298c50edab46bbf78b8741e96de6a37179621589aab20be640"
+        }
+      ],
+      "dynamic_math_assets": [],
+      "code_location_notes": "ChatView contains Markdown parsing, rehype-highlight/lowlight common language grammars, and KaTeX."
+    },
+    {
+      "name": "phase2",
+      "main_entry": "assets/index-Ch6Kne0r.js",
+      "chat_chunk": "assets/ChatView-Bd1fJ3ut.js",
+      "static_graph": {
+        "assets": [
+          {
+            "file": "assets/index-Ch6Kne0r.js",
+            "bytes": 460670,
+            "gzip_bytes": 149489,
+            "sha256": "0e42ec3edfa8513ee72731c3f4d5ac18c989c9ea483b195ed8a1eac179e97287"
+          },
+          {
+            "file": "assets/ChatView-Bd1fJ3ut.js",
+            "bytes": 222942,
+            "gzip_bytes": 67065,
+            "sha256": "aa43ad24d3f86712b96c59682fc97f871b9ed5ff88ee81ef8f71e8de7a4bc05c"
+          },
+          {
+            "file": "assets/MiningCatalog-CItUeWB1.js",
+            "bytes": 15097,
+            "gzip_bytes": 4534,
+            "sha256": "d0e8b315f85b1a9c4a8670fcea7b0644dc37debb8c70f358042f9ee8e94e03bd"
+          },
+          {
+            "file": "assets/MiningQueuePanel-DJTakAiN.js",
+            "bytes": 4287,
+            "gzip_bytes": 1709,
+            "sha256": "7f693e0d8fe1930ec5f0f3ac2ee03aa57403343fa92fcc40207f025bf7a87744"
+          }
+        ],
+        "bytes": 702996,
+        "gzip_bytes": 222797
+      },
+      "worker_assets": [
+        {
+          "file": "assets/markdown.worker-D8aAiKwi.js",
+          "bytes": 159639,
+          "gzip_bytes": 51428,
+          "sha256": "1627f40c1f45eb2975da0255ffd8385b83fa31acda6b34c39ef2c42d07e1256e"
+        },
+        {
+          "file": "assets/highlight.worker-BqduGbbr.js",
+          "bytes": 165321,
+          "gzip_bytes": 55010,
+          "sha256": "ed9c81a50891333376c1976ce353cb3ada58fe6161c4307fb643096470a24087"
+        }
+      ],
+      "dynamic_math_assets": [
+        {
+          "file": "assets/index-eaOakXzv.js",
+          "bytes": 459157,
+          "gzip_bytes": 138587,
+          "sha256": "ac139e3b6171732823c1cef20ca2d955d02329af9dcb4b6abfd135ee50d2650a",
+          "role": "KaTeX and HTML-to-AST conversion loaded dynamically inside the Markdown worker"
+        },
+        {
+          "file": "assets/index-DgFMVGmY.js",
+          "bytes": 441045,
+          "gzip_bytes": 133218,
+          "sha256": "cd96692e8cbdc5f0542202da7cd9a8f0d85631eaf374da876b551c588a5383b8",
+          "role": "KaTeX and HTML-to-AST conversion loaded dynamically by the compatibility fallback"
+        }
+      ],
+      "code_location_notes": "The main/Chat static graph has no Markdown parser, KaTeX renderer, or language grammars. Markdown parsing is in the Markdown worker, with optional math dynamic imports. Completed code highlighting uses the shared highlight worker."
+    }
+  ],
+  "comparison": {
+    "main_entry_bytes": {
+      "before": 436592,
+      "after": 460670,
+      "note": "The entry increased with the new workbench and related changes."
+    },
+    "chat_chunk_bytes": {
+      "before": 793170,
+      "after": 222942,
+      "reduction_percent": 71.89
+    },
+    "static_graph_bytes": {
+      "before": 1249146,
+      "after": 702996,
+      "reduction_percent": 43.72
+    },
+    "static_graph_gzip_bytes": {
+      "before": 383625,
+      "after": 222797,
+      "reduction_percent": 41.92
+    }
+  }
+}

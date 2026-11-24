@@ -10,12 +10,16 @@
 // is not part of the API this version commits to.)
 
 import { create } from 'zustand'
-import { createJSONStorage, persist, type PersistStorage, type StorageValue } from 'zustand/middleware'
+import { persist, type PersistStorage } from 'zustand/middleware'
 import { api, streamChat, type ChatRequest } from '../lib/api'
 import { joinContinuation } from '../lib/continuation'
 import { splitThinking } from '../lib/reasoning'
 import { withReasoningRecovery } from '../lib/reasoningRecovery'
 import { defaultModelId } from '../lib/modelSelection'
+import { createFrameBatch } from '../lib/frameBatch'
+import { createSessionStorage } from '../lib/sessionStorage'
+import { miningQueueResource } from '../lib/runtimeResources'
+import { reconcileMining } from '../lib/miningReconcile'
 import { hasRepeatedTail, historyForModel, trimRepeatedTail, withRetryHint } from '../lib/history'
 import { useUi } from './ui'
 import type {
@@ -65,6 +69,8 @@ type StudioState = {
   runtime: RuntimeStatus | null
   downloads: DownloadProgress[]
   sample: RuntimeSample | null
+  /** Last 120 samples, recorded by the window's SSE subscription even when Monitor is hidden. */
+  sampleHistory: RuntimeSample[]
   connected: boolean
   loadingModelId: string | null
   /** The default for new chats; a choice, independent of engine residency. */
@@ -146,12 +152,14 @@ type StudioState = {
 
   /** The runtime's mining queue, as last read; drives the badges under user messages. */
   miningQueue: MiningQueueView | null
+  acceptMiningQueue: (queue: MiningQueueView) => void
   refreshMining: () => Promise<void>
 }
 
 /** The in-flight generation. Outside the store: it is not state anyone renders, and it must not
  *  be serialised into localStorage. */
 let inFlight: AbortController | null = null
+let bootstrapInFlight: Promise<void> | null = null
 let latestModelLoad = 0
 let modelLoadQueue: Promise<void> = Promise.resolve()
 
@@ -191,47 +199,28 @@ const SESSION_KEY = 'misaka-studio.session'
  * every token. The live overlay is not persisted, so nearly all of those writes wrote the same
  * bytes again — the whole history, which in an agent thread holds file contents, dozens of times a
  * second. A write is skipped when nothing persisted changed, delayed when something did, and
- * flushed when the window is hidden or closed, so a reload loses nothing.
+ * flushed when the window is hidden or closed. Navigation writes a separate small record, so
+ * switching a view never serialises the full transcript just to remember the current view.
  */
 function sessionStorage(): PersistStorage<Persisted> | undefined {
-  const json = createJSONStorage<Persisted>(() => localStorage)
-  if (!json) return undefined
-  let last: Persisted | null = null
-  let pending: { name: string; value: StorageValue<Persisted> } | null = null
-  let timer: ReturnType<typeof setTimeout> | null = null
-  const flush = () => {
-    if (timer) clearTimeout(timer)
-    timer = null
-    if (!pending) return
-    const { name, value } = pending
-    pending = null
-    try {
-      void json.setItem(name, value)
-    } catch (error) {
-      // Over quota, most likely. The window keeps working; what was not saved is what a reload
-      // would lose, which is better said in the console than by refusing to stream.
-      console.warn('LLM Studio could not save the conversations:', error)
-    }
+  let storage: ReturnType<typeof createSessionStorage<Persisted>>
+  try {
+    storage = createSessionStorage<Persisted>(localStorage, (error) => {
+      console.warn('LLM Studio session storage:', error)
+      // Hydration can report an error while this store is still being constructed. Notify once
+      // the store exists; the adapter deduplicates repeated failures until a save succeeds.
+      queueMicrotask(() => useStudio.getState().toast('error', error instanceof Error ? error.message : '会話履歴の保存でエラーが発生しました。'))
+    })
+  } catch {
+    return undefined
   }
   if (typeof window !== 'undefined') {
-    window.addEventListener('pagehide', flush)
+    window.addEventListener('pagehide', storage.flush)
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') flush()
+      if (document.visibilityState === 'hidden') storage.flush()
     })
   }
-  return {
-    getItem: (name) => json.getItem(name),
-    removeItem: (name) => json.removeItem(name),
-    setItem: (name, value) => {
-      const state = value.state
-      if (last && last.conversations === state.conversations && last.activeConversationId === state.activeConversationId && last.view === state.view && last.preferredModelId === state.preferredModelId) {
-        return
-      }
-      last = state
-      pending = { name, value }
-      if (!timer) timer = setTimeout(flush, 500)
-    },
-  }
+  return storage
 }
 
 export const useStudio = create<StudioState>()(
@@ -244,6 +233,7 @@ export const useStudio = create<StudioState>()(
       runtime: null,
       downloads: [],
       sample: null,
+      sampleHistory: [],
       connected: false,
       loadingModelId: null,
       preferredModelId: null,
@@ -270,25 +260,29 @@ export const useStudio = create<StudioState>()(
       },
       dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
-      bootstrap: async () => {
-        try {
-          const [system, settings, models, runtime, downloads] = await Promise.all([
-            api.system(),
-            api.settings(),
-            api.models(),
-            api.runtime(),
-            api.downloads(),
-          ])
-          set({ system, settings, models, runtime, downloads, connected: true })
-          set({ preferredModelId: get().preferredModelId ?? defaultModelId(get()) })
-        } catch (error) {
-          set({ connected: false })
-          get().toast('error', `Cannot reach the LLM Studio Runtime: ${(error as Error).message}`)
-        }
-        // Fetched separately from the core bootstrap: an image backend is opt-in and not
-        // configuring one must never be the reason chat fails to open.
-        void get().refreshImageModels()
-        void get().refreshImageRuntime()
+      bootstrap: () => {
+        if (bootstrapInFlight) return bootstrapInFlight
+        bootstrapInFlight = (async () => {
+          try {
+            const [system, settings, models, runtime, downloads] = await Promise.all([
+              api.system(),
+              api.settings(),
+              api.models(),
+              api.runtime(),
+              api.downloads(),
+            ])
+            set({ system, settings, models, runtime, downloads, connected: true })
+            set({ preferredModelId: get().preferredModelId ?? defaultModelId(get()) })
+          } catch (error) {
+            set({ connected: false })
+            get().toast('error', `Cannot reach the LLM Studio Runtime: ${(error as Error).message}`)
+          }
+          // Fetched separately from the core bootstrap: an image backend is opt-in and not
+          // configuring one must never be the reason chat fails to open.
+          void get().refreshImageModels()
+          void get().refreshImageRuntime()
+        })().finally(() => { bootstrapInFlight = null })
+        return bootstrapInFlight
       },
 
       refreshModels: async () => {
@@ -470,7 +464,7 @@ export const useStudio = create<StudioState>()(
         }
       },
 
-      setSample: (sample) => set({ sample, connected: true }),
+      setSample: (sample) => set((s) => ({ sample, sampleHistory: [...s.sampleHistory.slice(-119), sample], connected: true })),
       setConnected: (connected) => set({ connected }),
 
       setDownload: (progress) => {
@@ -481,7 +475,8 @@ export const useStudio = create<StudioState>()(
           return { downloads }
         })
         if (progress.status === 'completed') {
-          get().toast('success', `${progress.model_id} downloaded`)
+          const label = progress.id.startsWith('catalog/') ? (progress.file === 'mlx' ? progress.repo : progress.file.split('/').pop()) : progress.model_id
+          get().toast('success', `${label} downloaded`)
           void get().refreshModels()
         }
         if (progress.status === 'failed') get().toast('error', progress.error ?? `${progress.file} failed`)
@@ -627,44 +622,14 @@ export const useStudio = create<StudioState>()(
         await runGeneration(set, get, conversationId)
       },
 
+      acceptMiningQueue: (queue) => {
+        if (get().miningQueue === queue) return
+        set((s) => ({ miningQueue: queue, conversations: reconcileMining(s.conversations, queue) }))
+      },
+
       refreshMining: async () => {
-        try {
-          const queue = await api.miningQueue()
-          set({ miningQueue: queue })
-          // Fold the queue's word back onto the messages that were queued from here. A message
-          // whose job the queue has since trimmed keeps what it last heard.
-          // Only what changed is replaced: the poll runs every few seconds, and a fresh object for
-          // every conversation each time redrew everything that reads them.
-          const byId = new Map(queue.jobs.map((j) => [j.id, j]))
-          set((s) => {
-            let changedAny = false
-            const conversations = s.conversations.map((c) => {
-              let changed = false
-              const messages = c.messages.map((m) => {
-                if (!m.mining) return m
-                const job = byId.get(m.mining.jobId)
-                if (!job) return m
-                const mining: MessageMining = { jobId: job.id, status: job.status, claimId: job.claim_id, error: job.error, answer: job.answer }
-                if (
-                  mining.status === m.mining.status &&
-                  mining.claimId === m.mining.claimId &&
-                  mining.error === m.mining.error &&
-                  mining.answer === m.mining.answer
-                )
-                  return m
-                changed = true
-                return { ...m, mining }
-              })
-              if (!changed) return c
-              changedAny = true
-              return { ...c, messages }
-            })
-            return changedAny ? { conversations } : {}
-          })
-        } catch {
-          // The runtime is the source of truth; when it is unreachable the badges simply keep
-          // their last state, the same way the connection dot already says so.
-        }
+        const queue = await miningQueueResource.refresh()
+        if (queue) get().acceptMiningQueue(queue)
       },
 
       regenerate: async (hint = false) => {
@@ -829,10 +794,12 @@ export async function streamReply(options: {
   const startedAt = performance.now()
   set({ streaming: { conversationId, assistantId, content: baseContent, startedAt } })
 
-  const updateStream = (patch: Partial<StreamingReply>) =>
+  const streamUpdates = createFrameBatch<StreamingReply>((patch) =>
     set((s) =>
-      s.streaming?.conversationId === conversationId && s.streaming.assistantId === assistantId ? { streaming: { ...s.streaming, ...patch } } : {},
-    )
+      s.streaming?.conversationId === conversationId && s.streaming.assistantId === assistantId ? { streaming: { ...s.streaming, ...patch } } : s,
+    ),
+  )
+  const updateStream = streamUpdates.push
 
   // "Regenerate" only helps where sampling can differ. The mining lane and the integer runtime
   // decode greedily by construction — the same prompt gives the same answer, and telling someone
@@ -946,6 +913,9 @@ export async function streamReply(options: {
     if ((error as Error).name === 'AbortError') return outcome({ aborted: true })
     return outcome({ error: (error as Error).message, failed: true })
   } finally {
+    // The caller commits the complete reply next. Flush even after abort/error and when the
+    // window is hidden (where animation frames may be paused); never leave a stale frame queued.
+    streamUpdates.flush()
     if (inFlight === controller) inFlight = null
     void get().refreshRuntime()
   }

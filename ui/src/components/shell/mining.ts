@@ -7,104 +7,87 @@
 
 import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
-import { api } from '../../lib/api'
+import { miningQueueResource, promptStackResource } from '../../lib/runtimeResources'
+import { hasRecentLocalMining } from '../../lib/miningReconcile'
+import type { createPollingResource } from '../../lib/polling'
 import type { MiningQueueView, PromptStackView } from '../../lib/types'
 import { useStudio } from '../../store/studio'
 
 type PromptStackState = {
-  /** The stack as last read; null before the first read and when the runtime did not answer. */
+  /** Last successful read, retained while temporarily disconnected. */
   stack: PromptStackView | null
+  error: string | null
 }
+export const usePromptStack = create<PromptStackState>(() => ({ stack: null, error: null }))
 
-/** The prompt stack's state, kept beside the queue `useStudio` already holds. */
-export const usePromptStack = create<PromptStackState>(() => ({ stack: null }))
-
+export function acceptPromptStack(stack: PromptStackView): void {
+  if (usePromptStack.getState().stack !== stack) usePromptStack.setState({ stack, error: null })
+}
 export async function refreshPromptStack(): Promise<void> {
-  try {
-    usePromptStack.setState({ stack: await api.promptStack() })
-  } catch {
-    usePromptStack.setState({ stack: null })
-  }
+  const stack = await promptStackResource.refresh()
+  if (stack) acceptPromptStack(stack)
 }
-
-/** Read both mining sources now — after an action that changed them, or when a panel opens. */
 export async function refreshMiningState(): Promise<void> {
   await Promise.all([refreshPromptStack(), useStudio.getState().refreshMining()])
 }
 
 const IDLE_MS = 15_000
-/** While a prompt is waiting for the lane, its badge should not lag the queue by a quarter minute. */
 const ACTIVE_MS = 5_000
-/** A reply just finished: whatever it queued or committed is worth reading straight away. */
 const SETTLE_MS = 1_500
-/** How long a message's own word that it is queued counts as "something is in flight". Past
- *  this the queue has trimmed the job or the runtime restarted, and the badge keeps what it last
- *  heard — which must not keep the poll fast forever. */
 const LOCAL_PENDING_WINDOW_MS = 10 * 60_000
 
 function jobsInFlight(): boolean {
   const { miningQueue, conversations } = useStudio.getState()
   if (miningQueue && miningQueue.counts.queued + miningQueue.counts.running > 0) return true
-  const since = Date.now() - LOCAL_PENDING_WINDOW_MS
-  return conversations.some((c) =>
-    c.messages.some((m) => (m.mining?.status === 'queued' || m.mining?.status === 'running') && (m.createdAt ?? 0) > since),
-  )
+  return hasRecentLocalMining(conversations, Date.now(), LOCAL_PENDING_WINDOW_MS)
+}
+const cadence = () => jobsInFlight() ? ACTIVE_MS : IDLE_MS
+const acceptQueue = (queue: MiningQueueView) => useStudio.getState().acceptMiningQueue(queue)
+const stackFailed = (error: unknown) => usePromptStack.setState({ error: error instanceof Error ? error.message : String(error) })
+
+/** All chrome and visible panels lease the same read service, with the fastest requested cadence. */
+function useResourceLease<T>(resource: ReturnType<typeof createPollingResource<T>>, interval: number | (() => number), accept: (value: T) => void, fail?: (error: unknown) => void): void {
+  useEffect(() => {
+    let value = resource.getSnapshot().value
+    let error = resource.getSnapshot().error
+    const changed = () => {
+      const snapshot = resource.getSnapshot()
+      if (snapshot.reading) return
+      if (snapshot.error && snapshot.error !== error) fail?.(snapshot.error)
+      else if (!snapshot.error && snapshot.value !== null && snapshot.value !== value) accept(snapshot.value)
+      value = snapshot.value
+      error = snapshot.error
+    }
+    const unsubscribe = resource.subscribe(changed)
+    const visibility = () => resource.setVisible(document.visibilityState !== 'hidden')
+    visibility()
+    const unwatch = resource.watch(interval)
+    document.addEventListener('visibilitychange', visibility)
+    return () => { unsubscribe(); unwatch(); document.removeEventListener('visibilitychange', visibility) }
+  }, [resource, interval, accept, fail])
 }
 
-/**
- * **The one mining poll in the window.** Mounted once, by `App`.
- *
- * Slow on purpose — the queue and the stack are lights, not dashboards — except while a prompt is
- * actually in the queue, and once right after a reply finishes. A hidden window is not polled at
- * all; it is read again the moment it is shown.
- */
+export function usePromptStackPolling(): void {
+  useResourceLease(promptStackResource, ACTIVE_MS, acceptPromptStack, stackFailed)
+}
+export function useMiningQueuePolling(): void {
+  useResourceLease(miningQueueResource, 10_000, acceptQueue)
+}
+
+/** One window service; Activity panel leases pause without duplicating the chrome's reads. */
 export function useMiningPoll(): void {
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let due = 0
-    let reading = false
-    let stopped = false
-
-    const schedule = (ms: number) => {
-      if (stopped) return
-      if (timer !== null) clearTimeout(timer)
-      due = Date.now() + ms
-      timer = setTimeout(() => void tick(), ms)
+  useResourceLease(promptStackResource, cadence, acceptPromptStack, stackFailed)
+  useResourceLease(miningQueueResource, cadence, acceptQueue)
+  useEffect(() => useStudio.subscribe((state, previous) => {
+    if (state.conversations !== previous.conversations || state.miningQueue !== previous.miningQueue) {
+      miningQueueResource.reschedule()
+      promptStackResource.reschedule()
     }
-    const tick = async () => {
-      timer = null
-      if (stopped || reading) return
-      if (document.visibilityState === 'hidden') return // `onVisibility` picks it up again
-      reading = true
-      try {
-        await refreshMiningState()
-      } finally {
-        reading = false
-      }
-      schedule(jobsInFlight() ? ACTIVE_MS : IDLE_MS)
+    if (previous.streaming !== null && state.streaming === null) {
+      miningQueueResource.soon(SETTLE_MS)
+      promptStackResource.soon(SETTLE_MS)
     }
-    /** Bring the next read forward to `ms` from now, unless it is already sooner. */
-    const soon = (ms: number) => {
-      if (stopped || reading) return
-      if (timer === null || due - Date.now() > ms) schedule(ms)
-    }
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible' && timer === null) void tick()
-    }
-    const unsubscribe = useStudio.subscribe((state, previous) => {
-      if (previous.streaming !== null && state.streaming === null) soon(SETTLE_MS)
-    })
-
-    void tick()
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      stopped = true
-      if (timer !== null) clearTimeout(timer)
-      unsubscribe()
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [])
+  }), [])
 }
 
 export type MiningSummary = {

@@ -18,9 +18,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useAgent } from '../../lib/agent/run'
 import { bytes, relativeTime } from '../../lib/format'
-import { findSnippet, foldCase, fuzzyMatch, highlightParts, mergeRanges, queryWords, type Range, type Snippet } from '../../lib/fuzzy'
+import { foldCase, fuzzyMatch, highlightParts, mergeRanges, queryWords, type Range, type Snippet } from '../../lib/fuzzy'
 import { isMac } from '../../lib/keys'
-import type { ChatMessage, Conversation } from '../../lib/types'
+import { MAX_PALETTE_THREADS, planThreadSearch, searchThreadContents, type ThreadContentMatch, type ThreadSearchPlan } from '../../lib/paletteSearch'
+import type { Conversation } from '../../lib/types'
 import { useStudio } from '../../store/studio'
 import { useUi, type AppMode, type RightPanel } from '../../store/ui'
 import { Icon, type IconName } from '../common'
@@ -102,7 +103,6 @@ const THEMES: { theme: Theme; label: string; icon: IconName }[] = [
 ]
 
 const RECENT_THREADS = 6
-const MAX_THREADS = 40
 /** Fuzzy matches scoring below this share of the best one are dropped: with "mine" typed, "Load
  *  model …" matches through scattered letters, and that is noise next to "Mining setup". */
 const RELATIVE_FLOOR = 0.2
@@ -152,10 +152,18 @@ function PaletteBody({ close }: { close: () => void }) {
   const agentId = useAgent((s) => s.run?.conversationId ?? null)
 
   const side = useUi((s) => s.appMode)
-  const sections = useMemo(
-    () => buildSections(commands, conversations, query, view === 'chat' ? activeId : null, new Set([streamingId, agentId].filter(Boolean) as string[]), side),
-    [commands, conversations, query, view, activeId, streamingId, agentId, side],
+  const byRecency = useMemo(() => [...conversations].sort((a, b) => b.updatedAt - a.updatedAt), [conversations])
+  const searchPlan = useMemo(() => planThreadSearch(byRecency, query, threadLabel), [byRecency, query])
+  const running = useMemo(() => new Set([streamingId, agentId].filter(Boolean) as string[]), [streamingId, agentId])
+  // Commands and thread names are available in the same render as the keystroke. Message
+  // contents are scanned in cancellable idle slices, and only for unfilled result slots.
+  const immediateSections = useMemo(
+    () => buildSections(commands, searchPlan, view === 'chat' ? activeId : null, running, side),
+    [commands, searchPlan, view, activeId, running, side],
   )
+  const contentLimit = MAX_PALETTE_THREADS - (immediateSections.find((section) => section.id === 'threads')?.rows.length ?? 0)
+  const content = useThreadContentSearch(searchPlan, contentLimit)
+  const sections = useMemo(() => addContentMatches(immediateSections, content.matches, running), [immediateSections, content.matches, running])
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections])
   const enabled = useMemo(() => rows.filter((r) => !r.disabled), [rows])
   const active = enabled.find((r) => r.key === activeKey) ?? enabled[0] ?? null
@@ -267,6 +275,7 @@ function PaletteBody({ close }: { close: () => void }) {
           id={listId}
           role="listbox"
           aria-label="Results"
+          aria-busy={content.searching}
           className="max-h-[min(26rem,58vh)] overflow-y-auto overscroll-contain p-1.5"
           // Clicking a row must not take the focus out of the search field: the keyboard keeps
           // working, and a row that asked for a second Enter can still get it.
@@ -301,11 +310,38 @@ function PaletteBody({ close }: { close: () => void }) {
           <span className="inline-flex items-center gap-1">
             <Kbd shortcut="enter" /> to run
           </span>
-          <span className="ml-auto hidden truncate sm:inline">Type a thread’s words to search its messages</span>
+          <span className="ml-auto hidden truncate sm:inline" role="status">
+            {content.searching ? 'Searching messages…' : 'Type a thread’s words to search its messages'}
+          </span>
         </div>
       )}
     </div>
   )
+}
+
+const EMPTY_CONTENT_MATCHES: readonly ThreadContentMatch[] = []
+
+function useThreadContentSearch(plan: ThreadSearchPlan, limit: number) {
+  const [result, setResult] = useState<{
+    plan: ThreadSearchPlan
+    limit: number
+    matches: readonly ThreadContentMatch[]
+    complete: boolean
+  } | null>(null)
+  const enabled = limit > 0 && plan.candidates.length > 0
+  useEffect(() => {
+    if (!enabled) return
+    return searchThreadContents(plan.candidates, plan.query, (matches, complete) => {
+      setResult({ plan, limit, matches, complete })
+    }, { limit })
+  }, [plan, limit, enabled])
+  // Effects clean up after rendering. Compare the exact search snapshot here as well, so a
+  // previous query (or a deleted/edited thread) cannot flash its results for even one render.
+  const current = result?.plan === plan && result.limit === limit ? result : null
+  return {
+    matches: enabled ? current?.matches ?? EMPTY_CONTENT_MATCHES : EMPTY_CONTENT_MATCHES,
+    searching: enabled && !current?.complete,
+  }
 }
 
 function PaletteRow({ id, row, active, armed, onHover, onRun }: { id: string; row: Row; active: boolean; armed: boolean; onHover: () => void; onRun: () => void }) {
@@ -678,16 +714,6 @@ const GO_KEYWORDS: Record<string, string> = {
   settings: 'preferences config options backend',
 }
 
-const foldedContent = new WeakMap<ChatMessage, string>()
-function folded(message: ChatMessage): string {
-  let value = foldedContent.get(message)
-  if (value === undefined) {
-    value = foldCase(message.content)
-    foldedContent.set(message, value)
-  }
-  return value
-}
-
 /** How well each word of a query must match a label or title to be shown (see `MatchOptions`). */
 const MIN_QUALITY = 0.45
 /** A keyword hit, per character: a little less than the same word found in the label. */
@@ -770,14 +796,12 @@ function threadRow(conversation: Conversation, ranges: Range[], score: number, b
 
 function buildSections(
   commands: Command[],
-  conversations: Conversation[],
-  query: string,
+  search: ThreadSearchPlan,
   currentId: string | null,
   running: Set<string>,
   side: AppMode,
 ): Section[] {
-  const words = queryWords(query)
-  const byRecency = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt)
+  const { query, words, byRecency } = search
 
   if (words.length === 0) {
     const sections: Section[] = [
@@ -802,33 +826,7 @@ function buildSections(
     if (match) (command.group === 'mining' ? mining : actions).push(commandRow(command, match.ranges, match.score))
   }
 
-  const whole = words.join(' ')
-  const threads: Row[] = []
-  const literal: Row[] = []
-  for (const conversation of byRecency) {
-    const label = threadLabel(conversation)
-    const title = fuzzyMatch(query, label, { minQuality: MIN_QUALITY })
-    if (title) {
-      threads.push(threadRow(conversation, title.ranges, title.score + 0.25, running.has(conversation.id)))
-      continue
-    }
-    // A title in a script with no word breaks (Japanese, say) gets no word-start bonuses, so a
-    // literal substring is a match there however the fuzzy score came out.
-    const at = foldCase(label).indexOf(whole)
-    if (at >= 0) {
-      threads.push(threadRow(conversation, [[at, at + whole.length]], 0.5, running.has(conversation.id)))
-      continue
-    }
-    if (whole.length < 2) continue
-    for (const message of conversation.messages) {
-      if (message.toolResults || message.role === 'system' || !message.content) continue
-      const snippet = findSnippet(message.content, query, { folded: folded(message) })
-      if (snippet) {
-        literal.push(threadRow(conversation, [], 0.1, running.has(conversation.id), snippet))
-        break
-      }
-    }
-  }
+  const threads = search.titles.map(({ conversation, ranges, score }) => threadRow(conversation, ranges, score, running.has(conversation.id)))
 
   const best = Math.max(0, ...actions.map((r) => r.score), ...mining.map((r) => r.score), ...threads.map((r) => r.score))
   const floor = best * RELATIVE_FLOOR
@@ -836,8 +834,7 @@ function buildSections(
   const sections: Section[] = [
     { id: 'actions', label: 'Actions', rows: keep(actions) },
     { id: 'mining', label: 'Prompt mining', rows: keep(mining) },
-    // Title matches by score, then message matches — those by recency, as they were found.
-    { id: 'threads', label: 'Threads', rows: [...keep(threads), ...literal].slice(0, MAX_THREADS) },
+    { id: 'threads', label: 'Threads', rows: keep(threads).slice(0, MAX_PALETTE_THREADS) },
   ].filter((s) => s.rows.length > 0)
   sections.sort((a, b) => (b.rows[0]?.score ?? 0) - (a.rows[0]?.score ?? 0))
 
@@ -865,4 +862,16 @@ function buildSections(
     ],
   })
   return sections
+}
+
+/** Title matches retain their score order; body matches follow in recency order. Only the
+ *  at-most-40 completed matches pass through this merge, never the history being searched. */
+function addContentMatches(sections: Section[], matches: readonly ThreadContentMatch[], running: Set<string>): Section[] {
+  if (matches.length === 0) return sections
+  const literal = matches.map(({ conversation, snippet }) => threadRow(conversation, [], 0.1, running.has(conversation.id), snippet))
+  const threads = sections.find((section) => section.id === 'threads')
+  const merged = sections.filter((section) => section.id !== 'threads' && section.id !== 'ask')
+  merged.push({ id: 'threads', label: 'Threads', rows: [...(threads?.rows ?? []), ...literal].slice(0, MAX_PALETTE_THREADS) })
+  merged.sort((a, b) => (b.rows[0]?.score ?? 0) - (a.rows[0]?.score ?? 0))
+  return [...merged, ...sections.filter((section) => section.id === 'ask')]
 }

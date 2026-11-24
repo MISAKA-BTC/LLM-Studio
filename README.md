@@ -1,5 +1,7 @@
 # LLM Studio
 
+日本語の改修内容・検証結果・起動方法: [VS Code本体を参照したバックエンド最適化（最新）](BACKEND-OPTIMIZATION-JA.md) / [Workbenchの操作・描画・保存](WORKBENCH-OPTIMIZATION-JA.md) / [画面保持とキャッシュ](RESPONSIVE-UI-JA.md)
+
 A local LLM desktop app: search Hugging Face, download a model, load it, chat with it — and serve
 an OpenAI-compatible API on `localhost` while you do. Windows, macOS and Linux. Chat runs locally;
 optional prompt mining sends work to the configured mining service.
@@ -140,15 +142,21 @@ Web content is untrusted evidence.
 
 ## Working in the window
 
-The window has two sides, switched at the top of the sidebar the way Claude's desktop app does it:
+The permanent Activity Bar switches the window's two sides:
 **Chat** — conversations with the loaded model — and **Code** — coding-agent sessions, grouped by the
 project folder they work in. Each side remembers the thread it had open. And it is built to be driven
-from the keyboard, the way an editor is.
+from the keyboard. Open conversations and views stay in the top tab strip; closing a tab keeps its
+history and unsent draft. The separately resizable sidebar and transcript render only their visible
+rows, and Markdown parsing runs in a worker. See [the optimization notes](WORKBENCH-OPTIMIZATION-JA.md)
+for the storage migration, cache bounds, verification and native-runtime limits.
 
 | Key | Does |
 |---|---|
 | `⌘⇧1` · `⌘⇧2` | Chat · Code |
 | `⌘K` / `Ctrl+K` | Command palette: every action, every thread (titles and message text), every installed model, and the prompt-mining controls |
+| `⌘P` / `Ctrl+P` | Quick Open: conversation titles and files in the active Code workspace |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous open tab (desktop shell; arrow keys in the tab strip also work) |
+| `⌘W` / `Ctrl+W` | Close the active tab in the desktop shell; keep its history and draft |
 | `⌘N` (`⌘⇧O` in a browser tab) · `⌘⇧A` | New chat or session on this side · new Code session |
 | `⌘B` · `⌘,` · `⌘1`…`⌘6` | Sidebar · Settings · the six views |
 | `⌘L` · `⌘/` | Focus the composer · every shortcut |
@@ -273,7 +281,7 @@ join a hosted pool. The Network tab exposes two local execution paths:
   while a separate local engine answers chat. The queue reports why it is unavailable when the
   gateway is stopped or no local chat engine can serve the selected model.
 
-Models → Discover lists the selected network's execution classes. testnet-12's genesis table
+Models → Model Search → Mining classes lists the selected network's execution classes. testnet-12's genesis table
 contains the deterministic floor, `PALW-QWEN25-A16-8K` and `PALW-QWEN25-A16-2M`. Downloads are
 size- and SHA-256-pinned, and readiness includes the replay/attempt memory requirement. Published
 PALWART3 models that are not registered classes are listed separately: installing one does not

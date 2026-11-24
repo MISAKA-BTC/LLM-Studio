@@ -1,0 +1,134 @@
+{
+  "schema": 1,
+  "date": "2026-11-24",
+  "source_reference_commit": "25e7ea7b8ff47efaf5dd69ee2645f1ed1962ed2c",
+  "environment": {
+    "platform": "Linux",
+    "architecture": "x86_64",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "node": "v24.22.3"
+  },
+  "gates": {
+    "cargo_fmt_check": "passed",
+    "cargo_clippy_all_targets_D_warnings": "passed",
+    "cargo_test_locked": "passed",
+    "cargo_build_release_locked": "passed",
+    "release_binary_check": "passed",
+    "typescript_and_vite_production_build": "passed",
+    "ui_unit_tests": {
+      "passed": 295,
+      "failed": 0
+    },
+    "actual_app_dom": {
+      "passed": 37,
+      "total": 37
+    },
+    "production_markdown_worker": "passed",
+    "desktop_build_script_tests": {
+      "passed": 7,
+      "native_tauri_compilation": false
+    }
+  },
+  "native_test_accounting": {
+    "cargo_reported_passed": 396,
+    "cargo_reported_failed": 0,
+    "cargo_reported_ignored": 1,
+    "suite_reports": 19,
+    "conditional_early_returns_counted_as_passed": 5,
+    "tests_with_configured_body_executed": 391,
+    "conditional_early_returns": [
+      "context::tokens::tests::the_tokenizer_file_counts_what_llama_cpp_counts",
+      "context_manager_512::with_the_class_tokenizer_the_plan_is_counted_exactly",
+      "continue_a_cut_off_reply::with_the_real_tokenizer_the_whole_question_and_a_tail_fit",
+      "llamacpp_e2e::a_real_engine_loads_streams_and_identifies_itself",
+      "llamacpp_e2e::a_missing_model_fails_fast_with_the_engines_own_words"
+    ],
+    "conditional_reason": "MISAKA_TEST_QWEN25_TOKENIZER, MISAKA_TEST_LLAMA_SERVER and MISAKA_TEST_MODELS_DIR are unset. These five existing tests return before assertions. The ignored test reaches public testnet nodes."
+  },
+  "release_smoke": {
+    "embedded_ui_files": 79,
+    "binary_platform": "Linux x86_64",
+    "check_mode_only": true,
+    "no_native_installer_in_delivery": true
+  },
+  "build_notes": [
+    "Rust 1.100 reports an existing Cargo manifest warning for the unused sha2 dependency in misaka-studio-core. Clippy -D warnings exits successfully; there are no Clippy errors.",
+    "Vite reports the existing static/dynamic import overlap for lib/agent/run.ts. The production build succeeds."
+  ],
+  "measurements": {
+    "cancellation_before": {
+      "passed": 0,
+      "failed": 4
+    },
+    "cancellation_after": {
+      "passed": 4,
+      "failed": 0
+    },
+    "method": "Same new cancellation integration test on the immutable phase-2 source copy and phase-3 source. Other work-volume tests assert counts against the current implementations; they are not a matched native UI benchmark.",
+    "reports": [
+      "phase3-background-checks.json",
+      "workspace-performance.md",
+      "phase3-inference-checks.json",
+      "phase3-ui-checks.json"
+    ]
+  },
+  "limits": [
+    "Actual model/GPU inference was not run.",
+    "Native Tauri/WebView launch and paint/input latency were not measured.",
+    "Windows/macOS builds were not executed.",
+    "No direct speed equivalence to VS Code is claimed."
+  ],
+  "logs": {
+    "phase3-rust-fmt.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "phase3-rust-clippy.log": {
+      "sha256": "972bd2d96977b15f4e270f6d2013e2b522997d8bb10a68f174378bf592049c02",
+      "bytes": 501
+    },
+    "phase3-rust-test.log": {
+      "sha256": "c79254e4f48bdcf332ffe766d397a80c67103105665d66b0954e13f69a3ed0f9",
+      "bytes": 37671
+    },
+    "phase3-rust-release.log": {
+      "sha256": "a7e7f7ed99a9677f2d736ecd4f6f353231e07ff51d8f320cbedf9560f83117e1",
+      "bytes": 9660
+    },
+    "phase3-runtime-check.log": {
+      "sha256": "0974c7ff08691fd36209863bd88a239cff74f51456bec6cebca36f7457bf73a3",
+      "bytes": 407
+    },
+    "phase3-ui-unit.log": {
+      "sha256": "8d30b130f40f1698518d8d5316b5faa1b749847458170fafd1e4a8616c79531c",
+      "bytes": 27486
+    },
+    "phase3-ui-workbench.log": {
+      "sha256": "2dcf95ef040c01f99f866ad3e0eb778ed1b13d919278d4b9c0f8626cbac3c233",
+      "bytes": 3826
+    },
+    "phase3-ui-build.log": {
+      "sha256": "e6b36ad28a6ca969a886ba516fa153f958a378d6ca0de8bf7e2d62bbbaf121db",
+      "bytes": 7958
+    },
+    "phase3-markdown-worker.log": {
+      "sha256": "ae15350e0b47dcbc6fd4a4106f92e3c581d315c1d31ac4516591f482ef013370",
+      "bytes": 346
+    },
+    "phase3-desktop.log": {
+      "sha256": "079511c97bba439395c76df33e6b9a8121c50ccc17659e4b032b95e81f69ac6e",
+      "bytes": 701
+    }
+  },
+  "reproduce": [
+    "cargo fmt --check",
+    "cargo clippy --locked --all-targets -- -D warnings",
+    "cargo test --locked",
+    "npm --prefix ui test",
+    "npm --prefix ui run test:workbench",
+    "npm --prefix ui run build",
+    "npm --prefix ui run test:markdown-worker",
+    "node --test scripts/desktop.test.mjs",
+    "cargo build --release --locked"
+  ]
+}

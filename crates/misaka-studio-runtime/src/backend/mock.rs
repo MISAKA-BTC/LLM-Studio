@@ -239,14 +239,23 @@ impl ImageBackend for NoneImageBackend {
 ///
 /// A small helper rather than a dependency on `async-stream`: the whole need is "spawn a producer,
 /// hand back the receiver as a stream", and a bounded channel gives the backpressure that keeps a
-/// slow client from making the producer race ahead.
+/// slow client from making the producer race ahead. The receiver also owns the producer's
+/// lifetime: a disconnect must cancel a quiet HTTP read or retry, not wait for another token to
+/// notice that `send` failed.
 pub(crate) fn async_stream<F, Fut>(producer: F) -> BoxStream<'static, Result<StreamEvent>>
 where
     F: FnOnce(tokio::sync::mpsc::Sender<Result<StreamEvent>>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let (tx, rx) = tokio::sync::mpsc::channel(32);
-    tokio::spawn(producer(tx));
+    tokio::spawn(async move {
+        let disconnect = tx.clone();
+        tokio::select! {
+            biased;
+            _ = disconnect.closed() => {}
+            _ = producer(tx) => {}
+        }
+    });
     Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
@@ -256,6 +265,67 @@ mod tests {
     use crate::backend::ChatMessage;
     use futures_util::StreamExt;
     use misaka_studio_core::provenance::SamplingCommitment;
+
+    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.take().unwrap().send(());
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_a_stream_cancels_a_producer_that_is_waiting_without_sending() {
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (dropped, ended) = tokio::sync::oneshot::channel();
+        let stream = async_stream(move |_tx| async move {
+            let _drop = DropSignal(Some(dropped));
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        ready.await.unwrap();
+        drop(stream);
+        tokio::time::timeout(Duration::from_secs(1), ended).await.expect("quiet producer is cancelled").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stream_dropped_before_its_task_runs_never_starts_producing() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let produced = calls.clone();
+        let stream = async_stream(move |_tx| async move {
+            produced.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        drop(stream);
+        tokio::task::yield_now().await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_slow_consumer_keeps_backpressure_and_disconnecting_releases_a_full_queue() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let produced = calls.clone();
+        let (filled, ready) = tokio::sync::oneshot::channel();
+        let (dropped, ended) = tokio::sync::oneshot::channel();
+        let stream = async_stream(move |tx| async move {
+            let _drop = DropSignal(Some(dropped));
+            let mut filled = Some(filled);
+            for index in 0..1000 {
+                if tx.send(Ok(StreamEvent::Delta(index.to_string()))).await.is_err() {
+                    return;
+                }
+                produced.fetch_add(1, Ordering::SeqCst);
+                if index == 31 {
+                    filled.take().unwrap().send(()).unwrap();
+                }
+            }
+        });
+        ready.await.unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 32, "a consumer that never polls cannot buffer the whole response");
+        drop(stream);
+        tokio::time::timeout(Duration::from_secs(1), ended).await.expect("backpressured producer is cancelled").unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 32);
+    }
 
     fn request(text: &str) -> GenerationRequest {
         GenerationRequest {

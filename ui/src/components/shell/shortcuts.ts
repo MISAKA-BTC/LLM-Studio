@@ -19,6 +19,11 @@ export const inDesktopShell: boolean =
 
 export const SHORTCUTS = {
   palette: 'mod+k',
+  paletteEditor: 'mod+shift+p',
+  quickOpen: 'mod+p',
+  nextTab: 'ctrl+tab',
+  previousTab: 'ctrl+shift+tab',
+  closeTab: 'mod+w',
   help: 'mod+/',
   toggleSidebar: 'mod+b',
   settings: 'mod+,',

@@ -103,10 +103,72 @@ test('selection survives persisted session hydration before the runtime is avail
   reset()
   await useStudio.getState().loadModel('b')
   await new Promise((resolve) => setTimeout(resolve, 550))
-  const saved = storage.get('misaka-studio.session')!
-  assert.equal(JSON.parse(saved).state.preferredModelId, 'b')
+  const saved = await useStudio.persist.getOptions().storage.getItem('misaka-studio.session')
+  assert.equal(saved.state.preferredModelId, 'b')
   useStudio.setState({ preferredModelId: null, conversations: [], activeConversationId: null, runtime: null, models: [], connected: false })
   await useStudio.persist.rehydrate()
   assert.equal(chatModelId(), 'b')
   assert.equal(useStudio.getState().preferredModelId, 'b')
+})
+
+test('a burst of streamed tokens publishes once per frame and flushes the complete reply before returning', async () => {
+  reset()
+  const frames = new Map<number, () => void>()
+  let nextFrame = 0
+  const previousRequest = globalThis.requestAnimationFrame
+  const previousCancel = globalThis.cancelAnimationFrame
+  const previousFetch = globalThis.fetch
+  globalThis.requestAnimationFrame = (callback) => { const id = ++nextFrame; frames.set(id, () => callback(0)); return id }
+  globalThis.cancelAnimationFrame = (id) => { frames.delete(id) }
+  const chunks = Array.from({ length: 500 }, (_, index) => `piece-${index}\n`)
+  const events = chunks.map((content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`).join('')
+  globalThis.fetch = async () => new Response(`${events}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+  const snapshots: string[] = []
+  const unsubscribe = useStudio.subscribe((next: any, before: any) => {
+    if (next.streaming && next.streaming !== before.streaming) snapshots.push(next.streaming.content)
+  })
+  try {
+    const reply = await streamReply({ conversationId: 'chat', assistantId: 'reply', messages: [], modelId: 'a' })
+    assert.equal(reply.content, chunks.join(''))
+    assert.deepEqual(snapshots, ['', chunks.join('')], 'one start notification and one batched content notification')
+    assert.equal(useStudio.getState().streaming.content, reply.content)
+    assert.equal(frames.size, 0, 'completion cancels its pending frame')
+  } finally {
+    unsubscribe()
+    globalThis.fetch = previousFetch
+    globalThis.requestAnimationFrame = previousRequest
+    globalThis.cancelAnimationFrame = previousCancel
+  }
+})
+
+test('Stop keeps the last tokens even when the next animation frame has not run', async () => {
+  reset()
+  const frames = new Set<number>()
+  let nextFrame = 0
+  const previousRequest = globalThis.requestAnimationFrame
+  const previousCancel = globalThis.cancelAnimationFrame
+  const previousFetch = globalThis.fetch
+  globalThis.requestAnimationFrame = () => { const id = ++nextFrame; frames.add(id); return id }
+  globalThis.cancelAnimationFrame = (id) => { frames.delete(id) }
+  globalThis.fetch = async (_url, options) => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial answer"}}]}\n\n'))
+      options?.signal?.addEventListener('abort', () => controller.error(new DOMException('Stopped', 'AbortError')), { once: true })
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } })
+  try {
+    const reply = streamReply({ conversationId: 'chat', assistantId: 'reply', messages: [], modelId: 'a' })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(frames.size, 1)
+    useStudio.getState().stop()
+    const outcome = await reply
+    assert.equal(outcome.aborted, true)
+    assert.equal(outcome.content, 'partial answer')
+    assert.equal(useStudio.getState().streaming.content, 'partial answer')
+    assert.equal(frames.size, 0)
+  } finally {
+    globalThis.fetch = previousFetch
+    globalThis.requestAnimationFrame = previousRequest
+    globalThis.cancelAnimationFrame = previousCancel
+  }
 })

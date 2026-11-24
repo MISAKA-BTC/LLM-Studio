@@ -29,17 +29,20 @@
 //! [`git`]; the HTTP layer runs them on the blocking pool.
 
 pub mod git;
+#[cfg(test)]
+mod performance_tests;
 
 use crate::{Error, Result};
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, VecDeque};
 use std::ffi::OsString;
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 /// `tree`: how deep, by default and at most.
@@ -78,6 +81,9 @@ pub const EXEC_STREAM_OUTPUT_CAP: usize = 8 * 1024 * 1024;
 /// A walk stops looking after this many entries — a home directory opened as a workspace must
 /// still answer, and say it stopped, rather than stat a million files.
 const WALK_CAP: usize = 50_000;
+/// Also cap entries visited, not just matched/scannable files: a million empty directories or
+/// oversized generated files must not turn an empty search into an unbounded walk.
+const WALK_ENTRY_CAP: usize = 100_000;
 /// `search` stops after scanning this many files, for the same reason.
 const SEARCH_SCAN_CAP: usize = 50_000;
 /// A file whose first 8 KiB hold a NUL byte is binary — git's own test, and ripgrep's.
@@ -227,6 +233,46 @@ fn real_path(lexical: &Path) -> std::io::Result<(PathBuf, bool)> {
 pub struct Workspace {
     /// Canonical — every containment check compares against this.
     root: PathBuf,
+    cancellation: Option<Cancellation>,
+    #[cfg(test)]
+    io_stats: Arc<WorkspaceIoStats>,
+}
+
+/// Cooperative cancellation for filesystem work already running on a blocking thread. Dropping
+/// the HTTP future cannot stop an OS syscall, but it can stop the next walk entry/read chunk.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Cancellation(Arc<AtomicBool>);
+
+impl Cancellation {
+    pub(crate) fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.0.load(Ordering::Relaxed) { Err(Error::Cancelled) } else { Ok(()) }
+    }
+
+    pub(crate) fn cancel_on_drop(&self) -> CancelOnDrop {
+        CancelOnDrop(self.clone())
+    }
+}
+
+pub(crate) struct CancelOnDrop(Cancellation);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct WorkspaceIoStats {
+    file_walks: AtomicUsize,
+    tree_file_stats: AtomicUsize,
+    read_chunks: AtomicUsize,
+    git_commands: Mutex<Vec<Vec<String>>>,
+    git_count_visits: AtomicUsize,
 }
 
 /// A path inside a workspace, checked.
@@ -256,11 +302,25 @@ impl Workspace {
         if !root.is_dir() {
             return Err(bad(format!("root {} is not a directory", display_path(&root))));
         }
-        Ok(Workspace { root })
+        Ok(Workspace {
+            root,
+            cancellation: None,
+            #[cfg(test)]
+            io_stats: Arc::default(),
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(crate) fn with_cancellation(mut self, cancellation: Cancellation) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    fn check_cancelled(&self) -> Result<()> {
+        self.cancellation.as_ref().map_or(Ok(()), Cancellation::check)
     }
 
     fn escapes(&self, path: &str, hint: Option<String>) -> Error {
@@ -560,6 +620,7 @@ fn explorer_key(path: &str, is_dir: bool) -> ExplorerKey {
 /// entries, the shallower ones are kept first: a listing that stops short should show all of the
 /// top level and part of the next, not all of the first subfolder and nothing after it.
 pub fn tree(workspace: &Workspace, path: Option<&str>, depth: Option<usize>, limit: Option<usize>) -> Result<TreeResponse> {
+    workspace.check_cancelled()?;
     let depth = depth.unwrap_or(TREE_DEFAULT_DEPTH).clamp(1, TREE_MAX_DEPTH);
     let limit = limit.unwrap_or(TREE_DEFAULT_LIMIT).clamp(1, TREE_MAX_LIMIT);
     let target = workspace.resolve(path.unwrap_or("."))?;
@@ -570,43 +631,56 @@ pub fn tree(workspace: &Workspace, path: Option<&str>, depth: Option<usize>, lim
         return Err(bad(format!("{} is a file, not a directory — read it instead", target.rel)));
     }
     let rules = Rules::for_root(workspace.root());
-    let mut found: Vec<(usize, ExplorerKey, TreeEntry)> = Vec::new();
+    // Keep only the shallowest/best `limit` entries. The old full vector also stat'ed every
+    // discarded file and sorted up to WALK_CAP entries to return a few hundred rows.
+    let mut found: BinaryHeap<(usize, ExplorerKey, String, bool)> = BinaryHeap::new();
+    let mut seen = 0;
     let mut truncated = false;
     for item in rules.walker(&target.real, Some(depth)).build() {
+        workspace.check_cancelled()?;
         let Ok(entry) = item else { continue };
         if entry.depth() == 0 {
             continue;
         }
-        if found.len() >= WALK_CAP {
+        if seen >= WALK_CAP {
             truncated = true;
             break;
         }
         let Ok(rel) = entry.path().strip_prefix(workspace.root()) else { continue };
-        let (is_dir, size) = match entry.file_type() {
-            Some(t) if t.is_dir() => (true, None),
-            Some(t) if t.is_file() => (false, entry.metadata().ok().map(|m| m.len())),
+        let is_dir = match entry.file_type() {
+            Some(t) if t.is_dir() => true,
+            Some(t) if t.is_file() => false,
             // A symlink is shown as what it points at; a dangling one as a file of no known size.
-            _ => match std::fs::metadata(entry.path()) {
-                Ok(m) if m.is_dir() => (true, None),
-                Ok(m) => (false, Some(m.len())),
-                Err(_) => (false, None),
-            },
+            _ => std::fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()),
         };
         let path = slash_path(rel);
-        found.push((entry.depth(), explorer_key(&path, is_dir), TreeEntry { path, is_dir, size }));
+        let candidate = (entry.depth(), explorer_key(&path, is_dir), path, is_dir);
+        seen += 1;
+        if found.len() < limit {
+            found.push(candidate);
+        } else {
+            truncated = true;
+            if found.peek().is_some_and(|worst| &candidate < worst) {
+                found.pop();
+                found.push(candidate);
+            }
+        }
     }
-    if found.len() > limit {
-        truncated = true;
-        found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-        found.truncate(limit);
-    }
+    let mut found = found.into_vec();
     found.sort_by(|a, b| a.1.cmp(&b.1));
-    Ok(TreeResponse {
-        root: display_path(workspace.root()),
-        path: target.rel,
-        entries: found.into_iter().map(|(_, _, entry)| entry).collect(),
-        truncated,
-    })
+    let mut entries = Vec::with_capacity(found.len());
+    for (_, _, path, is_dir) in found {
+        workspace.check_cancelled()?;
+        let size = if is_dir {
+            None
+        } else {
+            #[cfg(test)]
+            workspace.io_stats.tree_file_stats.fetch_add(1, Ordering::Relaxed);
+            std::fs::metadata(workspace.root().join(&path)).ok().map(|m| m.len())
+        };
+        entries.push(TreeEntry { path, is_dir, size });
+    }
+    Ok(TreeResponse { root: display_path(workspace.root()), path: target.rel, entries, truncated })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -618,12 +692,161 @@ pub struct FilesResponse {
 /// first. An empty query lists the most recently modified files — what someone is most likely to
 /// mention next.
 pub fn files(workspace: &Workspace, query: &str, limit: Option<usize>) -> Result<FilesResponse> {
+    // Agent/tool callers keep a fresh view. A refresh also invalidates an earlier UI index.
+    invalidate_file_indexes(workspace.root());
+    find_files(workspace, query, limit, false)
+}
+
+/// The interactive finder may reuse a small, short-lived path index across keystrokes. This is
+/// deliberately opt-in: no filesystem watcher is installed, so external changes can take up to
+/// FILE_INDEX_TTL to appear. Writes/edits/removes and our commands invalidate it immediately.
+pub fn files_cached(workspace: &Workspace, query: &str, limit: Option<usize>) -> Result<FilesResponse> {
+    find_files(workspace, query, limit, true)
+}
+
+fn find_files(workspace: &Workspace, query: &str, limit: Option<usize>, cached: bool) -> Result<FilesResponse> {
+    workspace.check_cancelled()?;
     let limit = limit.unwrap_or(FILES_DEFAULT_LIMIT).clamp(1, FILES_MAX_LIMIT);
     let query: Vec<char> =
         query.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '\\' { '/' } else { fold_case(c) }).take(128).collect();
+    let index = if cached {
+        cached_file_index(workspace, query.is_empty())?
+    } else {
+        Arc::new(build_file_index(workspace, query.is_empty())?)
+    };
+    // A bounded heap sorts only the requested top results, preserving the previous score/tie
+    // rules without copying and sorting every matching path on every keystroke.
+    let paths = if query.is_empty() {
+        let mut best = BinaryHeap::new();
+        for (path, modified) in &index.candidates {
+            workspace.check_cancelled()?;
+            keep_best(&mut best, (Reverse(*modified), path.as_str()), limit);
+        }
+        best.into_sorted_vec().into_iter().map(|(_, path)| path.to_owned()).collect()
+    } else {
+        let mut best = BinaryHeap::new();
+        for (path, _) in &index.candidates {
+            workspace.check_cancelled()?;
+            if let Some(score) = score_path(&query, path) {
+                keep_best(&mut best, (Reverse(score), path.len(), path.as_str()), limit);
+            }
+        }
+        best.into_sorted_vec().into_iter().map(|(_, _, path)| path.to_owned()).collect()
+    };
+    Ok(FilesResponse { paths })
+}
+
+fn keep_best<T: Ord>(heap: &mut BinaryHeap<T>, candidate: T, limit: usize) {
+    if heap.len() < limit {
+        heap.push(candidate);
+    } else if heap.peek().is_some_and(|worst| &candidate < worst) {
+        heap.pop();
+        heap.push(candidate);
+    }
+}
+
+const FILE_INDEX_TTL: Duration = Duration::from_secs(2);
+const FILE_INDEX_ROOTS: usize = 8;
+const FILE_INDEX_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+struct FileIndex {
+    candidates: Vec<(String, Option<SystemTime>)>,
+    has_modified: bool,
+    built: Instant,
+    bytes: usize,
+}
+
+#[derive(Default)]
+struct FileIndexState {
+    generation: u64,
+    loading: bool,
+    index: Option<Arc<FileIndex>>,
+}
+
+#[derive(Default)]
+struct FileIndexSlot {
+    state: Mutex<FileIndexState>,
+    ready: Condvar,
+}
+
+type FileIndexes = VecDeque<(PathBuf, Arc<FileIndexSlot>)>;
+
+fn file_indexes() -> &'static Mutex<FileIndexes> {
+    static INDEXES: OnceLock<Mutex<FileIndexes>> = OnceLock::new();
+    INDEXES.get_or_init(Mutex::default)
+}
+
+fn file_index_slot(root: &Path) -> Arc<FileIndexSlot> {
+    let mut indexes = file_indexes().lock().unwrap_or_else(|e| e.into_inner());
+    let slot = indexes
+        .iter()
+        .position(|(path, _)| path == root)
+        .and_then(|at| indexes.remove(at))
+        .map(|(_, slot)| slot)
+        .unwrap_or_else(|| Arc::new(FileIndexSlot::default()));
+    indexes.push_front((root.to_path_buf(), slot.clone()));
+    indexes.truncate(FILE_INDEX_ROOTS);
+    slot
+}
+
+fn invalidate_file_indexes(root: &Path) {
+    let indexes = file_indexes().lock().unwrap_or_else(|e| e.into_inner());
+    for (path, slot) in indexes.iter() {
+        // The same folder can be open as both a workspace and a sub-workspace.
+        if path.starts_with(root) || root.starts_with(path) {
+            let mut state = slot.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.generation = state.generation.wrapping_add(1);
+            state.index = None;
+        }
+    }
+}
+
+struct FinishIndexBuild<'a>(&'a FileIndexSlot);
+
+impl Drop for FinishIndexBuild<'_> {
+    fn drop(&mut self) {
+        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).loading = false;
+        self.0.ready.notify_all();
+    }
+}
+
+fn cached_file_index(workspace: &Workspace, modified: bool) -> Result<Arc<FileIndex>> {
+    let slot = file_index_slot(workspace.root());
+    let generation = loop {
+        workspace.check_cancelled()?;
+        let mut state = slot.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(index) = &state.index
+            && index.built.elapsed() < FILE_INDEX_TTL
+            && (!modified || index.has_modified)
+        {
+            return Ok(index.clone());
+        }
+        if state.loading {
+            // Another request is already walking this root. Wait without starting a duplicate
+            // walk, and periodically observe cancellation even if that disk is slow.
+            drop(slot.ready.wait_timeout(state, Duration::from_millis(25)).unwrap_or_else(|e| e.into_inner()));
+            continue;
+        }
+        state.loading = true;
+        break state.generation;
+    };
+    let _finish = FinishIndexBuild(&slot);
+    let index = Arc::new(build_file_index(workspace, modified)?);
+    let mut state = slot.state.lock().unwrap_or_else(|e| e.into_inner());
+    if state.generation == generation && index.bytes <= FILE_INDEX_MAX_BYTES {
+        state.index = Some(index.clone());
+    }
+    Ok(index)
+}
+
+fn build_file_index(workspace: &Workspace, modified: bool) -> Result<FileIndex> {
+    #[cfg(test)]
+    workspace.io_stats.file_walks.fetch_add(1, Ordering::Relaxed);
     let rules = Rules::for_root(workspace.root());
     let mut candidates: Vec<(String, Option<SystemTime>)> = Vec::new();
-    for item in rules.walker(workspace.root(), None).build() {
+    let mut bytes = 0usize;
+    for item in rules.walker(workspace.root(), None).build().take(WALK_ENTRY_CAP) {
+        workspace.check_cancelled()?;
         let Ok(entry) = item else { continue };
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
@@ -632,20 +855,13 @@ pub fn files(workspace: &Workspace, query: &str, limit: Option<usize>) -> Result
             break;
         }
         let Ok(rel) = entry.path().strip_prefix(workspace.root()) else { continue };
-        let modified = if query.is_empty() { entry.metadata().ok().and_then(|m| m.modified().ok()) } else { None };
-        candidates.push((slash_path(rel), modified));
+        let modified_at = if modified { entry.metadata().ok().and_then(|m| m.modified().ok()) } else { None };
+        let path = slash_path(rel);
+        bytes = bytes.saturating_add(path.capacity());
+        candidates.push((path, modified_at));
     }
-
-    let paths = if query.is_empty() {
-        candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        candidates.into_iter().take(limit).map(|(path, _)| path).collect()
-    } else {
-        let mut scored: Vec<(i64, String)> =
-            candidates.into_iter().filter_map(|(path, _)| score_path(&query, &path).map(|score| (score, path))).collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.len().cmp(&b.1.len())).then_with(|| a.1.cmp(&b.1)));
-        scored.into_iter().take(limit).map(|(_, path)| path).collect()
-    };
-    Ok(FilesResponse { paths })
+    bytes = bytes.saturating_add(candidates.capacity() * std::mem::size_of::<(String, Option<SystemTime>)>());
+    Ok(FileIndex { candidates, has_modified: modified, built: Instant::now(), bytes })
 }
 
 fn fold_case(c: char) -> char {
@@ -766,6 +982,133 @@ fn utf8_floor(bytes: &[u8], max: usize) -> usize {
     end
 }
 
+/// A file's identity/version, not just its path. On Unix ctime also catches an in-place rewrite
+/// whose mtime was restored, and inode/device catch an atomic replacement with the same size.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileFingerprint {
+    size: u64,
+    modified: SystemTime,
+    created: Option<SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+impl FileFingerprint {
+    fn from_metadata(meta: &std::fs::Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Some(Self {
+            size: meta.len(),
+            modified: meta.modified().ok()?,
+            created: meta.created().ok(),
+            #[cfg(unix)]
+            identity: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
+        })
+    }
+}
+
+const LINE_INDEX_FILES: usize = 32;
+const LINE_INDEX_TTL: Duration = Duration::from_secs(60);
+const LINE_INDEX_STRIDE: usize = 256;
+const LINE_INDEX_CHECKPOINTS: usize = 8192;
+
+struct LineIndex {
+    total_lines: usize,
+    /// (1-based line, byte offset), kept sparse even for multi-gigabyte log files.
+    checkpoints: Vec<(usize, u64)>,
+    built: Instant,
+}
+
+impl LineIndex {
+    fn before(&self, line: usize) -> (usize, u64) {
+        let next = self.checkpoints.partition_point(|(at, _)| *at <= line);
+        self.checkpoints[next.saturating_sub(1)]
+    }
+}
+
+struct LineIndexBuilder {
+    checkpoints: Vec<(usize, u64)>,
+    stride: usize,
+}
+
+impl LineIndexBuilder {
+    fn new() -> Self {
+        Self { checkpoints: vec![(1, 0)], stride: LINE_INDEX_STRIDE }
+    }
+
+    fn newline(&mut self, line: usize, offset: u64) {
+        if !(line - 1).is_multiple_of(self.stride) {
+            return;
+        }
+        if self.checkpoints.len() == LINE_INDEX_CHECKPOINTS {
+            let mut at = 0;
+            self.checkpoints.retain(|_| {
+                let keep = at % 2 == 0;
+                at += 1;
+                keep
+            });
+            self.stride = self.stride.saturating_mul(2);
+        }
+        if (line - 1).is_multiple_of(self.stride) {
+            self.checkpoints.push((line, offset));
+        }
+    }
+}
+
+type LineIndexes = VecDeque<(PathBuf, FileFingerprint, Arc<LineIndex>)>;
+
+fn line_indexes() -> &'static Mutex<LineIndexes> {
+    static INDEXES: OnceLock<Mutex<LineIndexes>> = OnceLock::new();
+    INDEXES.get_or_init(Mutex::default)
+}
+
+fn cached_line_index(path: &Path, stamp: &FileFingerprint) -> Option<Arc<LineIndex>> {
+    let mut indexes = line_indexes().lock().unwrap_or_else(|e| e.into_inner());
+    let at = indexes.iter().position(|(p, _, _)| p == path)?;
+    let entry = indexes.remove(at)?;
+    if &entry.1 != stamp || entry.2.built.elapsed() >= LINE_INDEX_TTL {
+        return None;
+    }
+    let index = entry.2.clone();
+    indexes.push_front(entry);
+    Some(index)
+}
+
+fn store_line_index(path: PathBuf, stamp: FileFingerprint, index: LineIndex) {
+    let mut indexes = line_indexes().lock().unwrap_or_else(|e| e.into_inner());
+    indexes.retain(|(p, _, _)| p != &path);
+    indexes.push_front((path, stamp, Arc::new(index)));
+    indexes.truncate(LINE_INDEX_FILES);
+}
+
+fn invalidate_workspace_caches(root: &Path) {
+    invalidate_file_indexes(root);
+    line_indexes().lock().unwrap_or_else(|e| e.into_inner()).retain(|(path, _, _)| !path.starts_with(root));
+}
+
+fn invalidate_changed_file(root: &Path, changed: &Path) {
+    invalidate_file_indexes(root);
+    // A save to one file should not discard line indexes for every other preview in the root.
+    line_indexes().lock().unwrap_or_else(|e| e.into_inner()).retain(|(path, _, _)| path != changed);
+}
+
+/// Commands may make changes before success, failure, timeout or cancellation. Invalidate both
+/// when they start and when their future/task ends, so no completed command leaves a UI index.
+struct WorkspaceInvalidation(PathBuf);
+
+impl WorkspaceInvalidation {
+    fn new(root: &Path) -> Self {
+        invalidate_workspace_caches(root);
+        Self(root.to_path_buf())
+    }
+}
+
+impl Drop for WorkspaceInvalidation {
+    fn drop(&mut self) {
+        invalidate_workspace_caches(&self.0);
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ReadResponse {
     pub path: String,
@@ -784,10 +1127,10 @@ pub struct ReadResponse {
 
 /// **Lines `start_line..=end_line` of a file**, within `max_bytes`, cut at a line boundary.
 ///
-/// The file is streamed rather than read whole — `total_lines` needs every newline counted, and
-/// that must not mean holding a 2 GB log in memory. A single line longer than the budget (minified
-/// JavaScript) is the one exception to the line boundary: it comes back cut at a character
-/// boundary, because an empty `content` would say nothing at all.
+/// A cold read streams to EOF to preserve the exact `total_lines` contract. It retains only sparse
+/// line offsets, not file contents. Further reads of that file version seek near the requested
+/// line and stop at the requested range/byte budget rather than scanning to EOF again. A single
+/// oversized line is cut at a character boundary so it still has a useful preview.
 pub fn read(
     workspace: &Workspace,
     path: &str,
@@ -795,6 +1138,7 @@ pub fn read(
     end_line: Option<usize>,
     max_bytes: Option<usize>,
 ) -> Result<ReadResponse> {
+    workspace.check_cancelled()?;
     let target = workspace.resolve(path)?;
     if !target.exists {
         return Err(bad(format!("{} does not exist", target.rel)));
@@ -810,15 +1154,25 @@ pub fn read(
     {
         return Err(bad(format!("end_line {end} is before start_line {start}")));
     }
-    let size = meta.len();
     let file = std::fs::File::open(&target.real).map_err(|e| bad(format!("{}: {e}", target.rel)))?;
+    // Fingerprint the open handle, not an earlier path stat which may precede an atomic save.
+    let meta = file.metadata().map_err(|e| bad(format!("{}: {e}", target.rel)))?;
+    let size = meta.len();
+    let fingerprint = FileFingerprint::from_metadata(&meta);
+    let cached = fingerprint.as_ref().and_then(|stamp| cached_line_index(&target.real, stamp));
     let mut reader = std::io::BufReader::with_capacity(64 * 1024, file);
 
-    let head = reader.fill_buf().map_err(|e| bad(format!("{}: {e}", target.rel)))?;
-    let binary = if head.len() >= BINARY_SNIFF_BYTES.min(size as usize) {
-        looks_binary(head)
+    let binary = if cached.is_some() {
+        // Only text files have a line index, and the open handle still has that exact version.
+        // Avoid reading the beginning a second time before seeking to a distant cached range.
+        false
     } else {
-        looks_binary(&sniff(&target.real).map_err(|e| bad(format!("{}: {e}", target.rel)))?)
+        let head = reader.fill_buf().map_err(|e| bad(format!("{}: {e}", target.rel)))?;
+        if head.len() >= BINARY_SNIFF_BYTES.min(size as usize) {
+            looks_binary(head)
+        } else {
+            looks_binary(&sniff(&target.real).map_err(|e| bad(format!("{}: {e}", target.rel)))?)
+        }
     };
     if binary {
         return Ok(ReadResponse {
@@ -833,20 +1187,37 @@ pub fn read(
         });
     }
 
+    if let Some(index) = &cached
+        && index.total_lines > 0
+        && start > index.total_lines
+    {
+        return Err(bad(format!("start_line {start} is past the end of {}, which has {} lines", target.rel, index.total_lines)));
+    }
+
     let wanted = |line: usize| line >= start && end_line.is_none_or(|end| line <= end);
     let mut content: Vec<u8> = Vec::new();
     let mut pending: Vec<u8> = Vec::new();
-    let mut line = 1usize;
+    let (mut line, mut offset) = cached.as_ref().map_or((1, 0), |index| index.before(start));
+    if offset > 0 {
+        reader.seek(SeekFrom::Start(offset)).map_err(|e| bad(format!("{}: {e}", target.rel)))?;
+    }
+    let mut building = cached.is_none().then(LineIndexBuilder::new);
     let mut last_included = 0usize;
     let mut full = false;
     let mut truncated = false;
     let mut any_bytes = false;
     let mut ends_with_newline = false;
-    loop {
+    'reading: loop {
+        workspace.check_cancelled()?;
+        if cached.is_some() && (full || end_line.is_some_and(|end| line > end)) {
+            break;
+        }
         let chunk = reader.fill_buf().map_err(|e| bad(format!("{}: {e}", target.rel)))?;
         if chunk.is_empty() {
             break;
         }
+        #[cfg(test)]
+        workspace.io_stats.read_chunks.fetch_add(1, Ordering::Relaxed);
         any_bytes = true;
         let length = chunk.len();
         let mut at = 0;
@@ -874,23 +1245,41 @@ pub fn read(
             }
             if line_ends {
                 line += 1;
+                if let Some(builder) = &mut building {
+                    builder.newline(line, offset + at as u64);
+                }
             }
             ends_with_newline = line_ends;
+            if cached.is_some() && (full || end_line.is_some_and(|end| line > end)) {
+                break 'reading;
+            }
         }
         reader.consume(length);
+        offset += length as u64;
     }
     // A last line with no newline after it is still a line.
     if !pending.is_empty() {
         content.append(&mut pending);
         last_included = line;
     }
-    let total_lines = if !any_bytes {
-        0
-    } else if ends_with_newline {
-        line - 1
-    } else {
-        line
-    };
+    let total_lines = cached.as_ref().map_or_else(
+        || {
+            if !any_bytes {
+                0
+            } else if ends_with_newline {
+                line - 1
+            } else {
+                line
+            }
+        },
+        |index| index.total_lines,
+    );
+    workspace.check_cancelled()?;
+    if let (Some(stamp), Some(builder)) = (fingerprint, building)
+        && reader.get_ref().metadata().ok().as_ref().and_then(FileFingerprint::from_metadata).as_ref() == Some(&stamp)
+    {
+        store_line_index(target.real, stamp, LineIndex { total_lines, checkpoints: builder.checkpoints, built: Instant::now() });
+    }
     if total_lines > 0 && start > total_lines {
         return Err(bad(format!("start_line {start} is past the end of {}, which has {total_lines} lines", target.rel)));
     }
@@ -1046,6 +1435,7 @@ fn excerpt(line: &str, regex: &regex::bytes::Regex) -> String {
 /// Line by line, like `rg` without `-U`: `^` and `$` are the line's, and a match never spans two
 /// lines. Results are in path order, so the same search answers the same way twice.
 pub fn search(workspace: &Workspace, request: &SearchRequest) -> Result<SearchResponse> {
+    workspace.check_cancelled()?;
     if request.pattern.is_empty() {
         return Err(bad("pattern is empty"));
     }
@@ -1071,6 +1461,7 @@ pub fn search(workspace: &Workspace, request: &SearchRequest) -> Result<SearchRe
     let base_prefix = if base.rel == "." { String::new() } else { format!("{}/", base.rel) };
 
     let mut scan = Scan {
+        workspace,
         line_regex: &line_regex,
         file_regex: file_regex.as_ref(),
         max_results,
@@ -1080,12 +1471,17 @@ pub fn search(workspace: &Workspace, request: &SearchRequest) -> Result<SearchRe
     };
     if base.real.is_file() {
         // A file named outright is searched whatever the glob says, as `rg PATTERN FILE` does.
-        scan.file(&base.real, &base.rel);
+        scan.file(&base.real, &base.rel)?;
     } else {
         let rules = Rules::for_root(workspace.root());
         let mut walker = rules.walker(&base.real, None);
         walker.sort_by_file_name(|a, b| a.cmp(b));
-        for item in walker.build() {
+        for (visited, item) in walker.build().enumerate() {
+            workspace.check_cancelled()?;
+            if visited >= WALK_ENTRY_CAP {
+                scan.truncated = true;
+                break;
+            }
             let Ok(entry) = item else { continue };
             if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;
@@ -1102,7 +1498,7 @@ pub fn search(workspace: &Workspace, request: &SearchRequest) -> Result<SearchRe
                 scan.truncated = true;
                 break;
             }
-            if !scan.file(entry.path(), &rel) {
+            if !scan.file(entry.path(), &rel)? {
                 break;
             }
         }
@@ -1112,6 +1508,7 @@ pub fn search(workspace: &Workspace, request: &SearchRequest) -> Result<SearchRe
 
 /// One search's progress.
 struct Scan<'a> {
+    workspace: &'a Workspace,
     line_regex: &'a regex::bytes::Regex,
     file_regex: Option<&'a regex::bytes::Regex>,
     max_results: usize,
@@ -1122,32 +1519,42 @@ struct Scan<'a> {
 
 impl Scan<'_> {
     /// Search one file. `false` once the result cap is reached and the search should stop.
-    fn file(&mut self, path: &Path, rel: &str) -> bool {
-        let Ok(meta) = std::fs::metadata(path) else { return true };
+    fn file(&mut self, path: &Path, rel: &str) -> Result<bool> {
+        self.workspace.check_cancelled()?;
+        let Ok(meta) = std::fs::metadata(path) else { return Ok(true) };
         if meta.len() > SEARCH_MAX_FILE_BYTES {
-            return true;
+            return Ok(true);
         }
-        let Ok(bytes) = std::fs::read(path) else { return true };
+        let Ok(file) = std::fs::File::open(path) else { return Ok(true) };
+        // A file can grow after stat. Keep the limit on the read itself as well.
+        let mut bytes = Vec::new();
+        if file.take(SEARCH_MAX_FILE_BYTES + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > SEARCH_MAX_FILE_BYTES {
+            return Ok(true);
+        }
+        self.workspace.check_cancelled()?;
         if looks_binary(&bytes) {
-            return true;
+            return Ok(true);
         }
         self.files_scanned += 1;
         if self.file_regex.is_some_and(|r| !r.is_match(&bytes)) {
-            return true;
+            return Ok(true);
         }
         for (index, raw) in bytes.split(|b| *b == b'\n').enumerate() {
+            if index % 256 == 0 {
+                self.workspace.check_cancelled()?;
+            }
             let line = raw.strip_suffix(b"\r").unwrap_or(raw);
             if !self.line_regex.is_match(line) {
                 continue;
             }
             if self.matches.len() == self.max_results {
                 self.truncated = true;
-                return false;
+                return Ok(false);
             }
             let text = excerpt(&String::from_utf8_lossy(line), self.line_regex);
             self.matches.push(SearchMatch { path: rel.to_string(), line: index + 1, text });
         }
-        true
+        Ok(true)
     }
 }
 
@@ -1238,6 +1645,7 @@ pub fn write(workspace: &Workspace, path: &str, content: String) -> Result<Write
         (true, None, None)
     };
     write_atomic(&destination, content.as_bytes(), permissions).map_err(|e| bad(format!("could not write {}: {e}", target.rel)))?;
+    invalidate_changed_file(workspace.root(), &destination);
     Ok(WriteResponse { path: target.rel, created, previous, bytes: content.len(), content })
 }
 
@@ -1280,6 +1688,7 @@ pub fn edit(workspace: &Workspace, path: &str, old_string: &str, new_string: &st
     }
     write_atomic(&target.real, outcome.content.as_bytes(), Some(meta.permissions()))
         .map_err(|e| bad(format!("could not write {}: {e}", target.rel)))?;
+    invalidate_changed_file(workspace.root(), &target.real);
     Ok(EditResponse { path: target.rel, previous, content: outcome.content, replacements: outcome.replacements })
 }
 
@@ -1576,6 +1985,7 @@ pub fn remove(workspace: &Workspace, path: &str) -> Result<RemoveResponse> {
         return Err(bad(format!("{} is a directory; remove deletes single files only", target.rel)));
     }
     std::fs::remove_file(&entry).map_err(|e| bad(format!("could not remove {}: {e}", target.rel)))?;
+    invalidate_changed_file(workspace.root(), &target.real);
     Ok(RemoveResponse { removed: target.rel })
 }
 
@@ -1931,6 +2341,7 @@ impl Running {
 /// could not return.
 pub async fn exec(workspace: &Workspace, command: &str, timeout_secs: Option<u64>) -> Result<ExecResponse> {
     check_command(command)?;
+    let _invalidation = WorkspaceInvalidation::new(workspace.root());
     let timeout = Duration::from_secs(timeout_secs.unwrap_or(EXEC_DEFAULT_TIMEOUT_SECS).clamp(1, EXEC_MAX_TIMEOUT_SECS));
     let mut running = start_command(workspace, command)?;
     let stdout = Arc::new(Mutex::new(Capture::default()));
@@ -1998,7 +2409,11 @@ pub fn exec_stream(
     let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
     match start_command(workspace, command) {
         Ok(running) => {
-            tokio::spawn(stream_command(running, timeout, events));
+            let invalidation = WorkspaceInvalidation::new(workspace.root());
+            tokio::spawn(async move {
+                let _invalidation = invalidation;
+                stream_command(running, timeout, events).await;
+            });
         }
         Err(error) => {
             let _ = events.send(ExecEvent::Error { message: error.to_string() });
@@ -2052,8 +2467,13 @@ impl OutputBudget {
 
     /// Take up to `wanted` bytes; returns how many were granted.
     fn take(&self, wanted: usize) -> usize {
-        let before = self.remaining.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| Some(left.saturating_sub(wanted)));
-        before.unwrap_or(0).min(wanted)
+        let mut before = self.remaining.load(Ordering::SeqCst);
+        loop {
+            match self.remaining.compare_exchange_weak(before, before.saturating_sub(wanted), Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return before.min(wanted),
+                Err(current) => before = current,
+            }
+        }
     }
 
     fn spent(&self) -> bool {

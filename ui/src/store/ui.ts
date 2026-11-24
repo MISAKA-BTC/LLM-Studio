@@ -27,6 +27,8 @@ type UiState = {
   /** Project folders collapsed in Code's sidebar. */
   collapsedProjects: string[]
   sidebarOpen: boolean
+  sidebarWidth: number
+  quickOpen: boolean
   paletteOpen: boolean
   /** What the palette's input starts with when it opens — "load model " from the status bar's
    *  model name, say. The palette takes it once, on opening, and clears it. */
@@ -53,6 +55,8 @@ type UiState = {
   toggleProject: (path: string) => void
   setSidebarOpen: (open: boolean) => void
   toggleSidebar: () => void
+  setSidebarWidth: (width: number) => void
+  setQuickOpen: (open: boolean) => void
   setPaletteOpen: (open: boolean) => void
   /** Open the palette, optionally with its input filled in. */
   openPalette: (query?: string) => void
@@ -76,6 +80,8 @@ export const useUi = create<UiState>()(
       lastThread: { chat: null, code: null },
       collapsedProjects: [],
       sidebarOpen: true,
+      sidebarWidth: 256,
+      quickOpen: false,
       paletteOpen: false,
       paletteQuery: '',
       shortcutsOpen: false,
@@ -95,8 +101,10 @@ export const useUi = create<UiState>()(
         })),
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
-      setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
-      openPalette: (query = '') => set({ paletteOpen: true, paletteQuery: query }),
+      setSidebarWidth: (width) => set({ sidebarWidth: Number.isFinite(width) ? Math.max(200, Math.min(420, Math.round(width))) : 256 }),
+      setQuickOpen: (quickOpen) => set(quickOpen ? { quickOpen, paletteOpen: false, shortcutsOpen: false } : { quickOpen }),
+      setPaletteOpen: (paletteOpen) => set(paletteOpen ? { paletteOpen, quickOpen: false } : { paletteOpen }),
+      openPalette: (query = '') => set({ paletteOpen: true, paletteQuery: query, quickOpen: false }),
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
       openWorkspacePicker: (conversationId = null) => set({ workspacePicker: { conversationId }, paletteOpen: false }),
       closeWorkspacePicker: () => set({ workspacePicker: null }),
@@ -117,6 +125,7 @@ export const useUi = create<UiState>()(
         lastThread: state.lastThread,
         collapsedProjects: state.collapsedProjects,
         sidebarOpen: state.sidebarOpen,
+        sidebarWidth: state.sidebarWidth,
         rightPanel: state.rightPanel,
         thinking: state.thinking,
         recentWorkspaces: state.recentWorkspaces,

@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-24",
+  "phase": 3,
+  "scope": "Inference request lifetime, CPU context preparation, SSE parsing, engine version/status probes and startup health deadline",
+  "summary_ja": "生成条件を変更せず、取消の伝播漏れ、通信スレッド上のcontext計算、SSEの繰り返しコピー/再解析、状態確認の重複プロセス起動、起動期限を超えるhealth待ちを修正。速度倍率ではなく失敗の解消と処理回数で検証。",
+  "source_frozen": true,
+  "reference": {
+    "archive": "vscode-main.zip",
+    "supplied_commit": "25e7ea7b8ff47efaf5dd69ee2645f1ed1962ed2c",
+    "read_sources": [
+      {
+        "path": "src/vs/base/common/cancellation.ts",
+        "concepts": [
+          "cancelOnDispose",
+          "CancellationToken.fromAbortSignal",
+          "CancellationTokenSource"
+        ]
+      },
+      {
+        "path": "src/vs/base/common/async.ts",
+        "concepts": [
+          "raceCancellation",
+          "Limiter",
+          "Queue"
+        ]
+      },
+      {
+        "path": "src/vs/base/parts/ipc/common/ipc.ts",
+        "concepts": [
+          "ChannelServer.onPromise ties request disposal to cancellation"
+        ]
+      }
+    ],
+    "adaptation": "Apply request-lifetime cancellation and bounded work to the existing Rust daemon and external engine process; no VS Code runtime or editor transplant."
+  },
+  "environment": {
+    "rust_toolchain_used": "1.100.0",
+    "test_platform": "Linux",
+    "engines": "Loopback HTTP stand-ins, shell child processes and minimal fixture model headers",
+    "actual_model_inference_benchmark": false,
+    "no_sampling_or_model_changes": true,
+    "cargo_dependencies_added": false
+  },
+  "cancellation": {
+    "test_file": "crates/misaka-studio-runtime/tests/inference_cancellation.rs",
+    "command": "cargo test --locked -p misaka-studio-runtime --test inference_cancellation",
+    "same_fixture_on_baseline_and_modified_source": true,
+    "baseline": "Unmodified phase 2 source; only the new test file was copied into the comparison checkout.",
+    "before": {
+      "passed": 0,
+      "failed": 4
+    },
+    "after": {
+      "passed": 4,
+      "failed": 0
+    },
+    "cases": [
+      {
+        "test": "dropping_generation_before_the_first_token_cancels_upstream_and_releases_metrics",
+        "condition": "Abort the generation future after the stand-in engine accepts the request, before any decoded event.",
+        "before_observed": {
+          "upstream_response_dropped": 1,
+          "decoded_events": 0,
+          "metrics_active": 1
+        },
+        "after_asserted": {
+          "upstream_response_dropped": 1,
+          "decoded_events": 0,
+          "metrics_active": 0
+        }
+      },
+      {
+        "test": "dropping_a_returned_stream_cancels_an_engine_silent_between_tokens",
+        "condition": "Read one decoded event, then drop the returned stream while the engine remains silent.",
+        "before_observed": {
+          "requests": 1,
+          "decoded_events": 1,
+          "upstream_response_dropped": 0,
+          "termination_check_timed_out": true
+        },
+        "after_asserted": {
+          "requests": 1,
+          "decoded_events": 1,
+          "upstream_response_dropped": 1,
+          "metrics_active": 0
+        }
+      },
+      {
+        "test": "an_http_disconnect_before_response_headers_cancels_first_token_wait",
+        "condition": "Send a complete HTTP request through the real Studio router, then close the TCP connection before response headers.",
+        "before_observed": {
+          "upstream_response_dropped": 1,
+          "decoded_events": 0,
+          "metrics_active": 1
+        },
+        "after_asserted": {
+          "requests": 1,
+          "upstream_response_dropped": 1,
+          "decoded_events": 0,
+          "metrics_active": 0
+        }
+      },
+      {
+        "test": "an_http_disconnect_after_one_event_reaches_the_quiet_engine",
+        "condition": "Read the first content event through the real SSE endpoint, then drop the HTTP response.",
+        "before_observed": {
+          "requests": 1,
+          "decoded_events": 1,
+          "upstream_response_dropped": 0,
+          "termination_check_timed_out": true
+        },
+        "after_asserted": {
+          "upstream_response_dropped": 1,
+          "decoded_events": 1,
+          "metrics_active": 0
+        }
+      }
+    ],
+    "failure_deadline_ms": 3000,
+    "deadline_interpretation": "A regression-test failure deadline, not a measured UI or inference latency. No speed ratio is derived from it.",
+    "implementation": [
+      "The state forwarding task selects receiver.closed() as well as the next backend event.",
+      "The bounded backend producer's entire future is cancelled when its receiver closes, including quiet reads and retries.",
+      "Generation metrics have a Drop guard so cancellation before the forwarding task starts cannot leak an active generation."
+    ]
+  },
+  "backend_producer_regressions": {
+    "passed": 3,
+    "source": "crates/misaka-studio-runtime/src/backend/mock.rs",
+    "conditions": [
+      "Dropping a stream releases a producer waiting without sending.",
+      "A stream dropped before its scheduled task runs produces zero events.",
+      "A consumer that never polls allows exactly 32 successful channel sends; dropping it releases the blocked producer."
+    ],
+    "channel_capacity_events": 32,
+    "constraint": "The channel limit counts events, not bytes."
+  },
+  "sse_regressions": {
+    "new_tests_passed": 3,
+    "sources": [
+      "crates/misaka-studio-runtime/src/backend/openai_child.rs",
+      "crates/misaka-studio-runtime/src/backend/gateway.rs"
+    ],
+    "conditions": [
+      {
+        "test": "a_long_unicode_delta_survives_single_byte_fragments",
+        "input": "2048 repetitions of mixed Japanese, emoji and ASCII text, delivered one byte at a time",
+        "assertion": "Exactly one unchanged content delta."
+      },
+      {
+        "test": "many_batched_frames_and_an_unfinished_tail_preserve_every_event",
+        "content_frames": 4096,
+        "assertion": "All content events plus a split Japanese reasoning event remain ordered; bytes after DONE are ignored."
+      },
+      {
+        "test": "claim_receipts_are_read_once_in_the_same_pass_as_fragmented_deltas",
+        "chunk_bytes": 3,
+        "content_frames": 512,
+        "receipt_frames": 1,
+        "parsed_json_frames_asserted": 513,
+        "assertion": "Each frame is inspected once; a claim ID with committed=false remains uncommitted."
+      }
+    ],
+    "changes": [
+      "Scan only newly appended bytes of an unfinished line.",
+      "Compact the SSE byte buffer once per received chunk instead of draining/copying the suffix for every line.",
+      "Read gateway receipt metadata in the existing JSON parse; remove the growing whole-response tail and its repeated reparsing."
+    ],
+    "unchanged": [
+      "Reasoning/content separation and order",
+      "Usage",
+      "Finish reason",
+      "DONE handling",
+      "First-token retry limits",
+      "Incomplete-response errors"
+    ],
+    "constraint": "The largest unfinished SSE line still requires buffering; this does not impose a new payload-size limit."
+  },
+  "context_regressions": {
+    "new_tests_passed": 4,
+    "source": "crates/misaka-studio-runtime/src/context/work.rs",
+    "concurrent_worker_limit": 2,
+    "conditions": [
+      "CPU context work can remain occupied while the single-thread async executor continues running.",
+      "Cancelling a request waiting for a worker slot performs zero context jobs.",
+      "A cancelled job that has already started retains its slot until its CPU work ends.",
+      "Dropping a request also aborts a job still queued inside Tokio's blocking pool."
+    ],
+    "integration": [
+      "Context plan, finish and required-input compaction execute in the bounded blocking pool.",
+      "The original conversation is shared with Arc rather than copied into a worker on the HTTP executor.",
+      "Context preview uses the same helper.",
+      "Hardware discovery and initial metrics construction run outside the async executor."
+    ],
+    "constraints": [
+      "A native tokenizer call already executing is not preempted; its result is discarded after request cancellation and its worker permit remains held until return.",
+      "HTTP disconnect propagation and context-queue cancellation are separately tested; no claim is made that an executing tokenizer is forcibly stopped.",
+      "The context-selection algorithm, tokenizer, summarizer sampling and generation sampling are unchanged."
+    ]
+  },
+  "version_probe_regressions": {
+    "new_tests_passed": 5,
+    "enclosing_openai_child_suite_passed": 28,
+    "source": "crates/misaka-studio-runtime/src/backend/openai_child.rs",
+    "success_ttl_seconds": 5,
+    "failure_ttl_seconds": 1,
+    "subprocess_timeout_seconds": 30,
+    "singleflight_scope": "One ChildEngine instance",
+    "invalidation": "Executable mtime or size changes invalidate cached status; the short TTL also bounds changes with an unchanged stamp.",
+    "provenance_policy": "descriptor() serializes with the same probe lock but always bypasses cached output and performs a fresh probe for the load.",
+    "child_lifetime": "kill_on_drop is enabled for version-only subprocesses; both timeout and cancelled awaiters terminate them.",
+    "conditions": [
+      {
+        "test": "version_status_is_singleflight_and_short_lived_but_provenance_always_probes_fresh",
+        "concurrent_status_reads": 4,
+        "child_processes_asserted": 1,
+        "fresh_descriptor_additional_processes_asserted": 1,
+        "checks": [
+          "stdout plus stderr preserved",
+          "cached reuse",
+          "success TTL expiry"
+        ]
+      },
+      {
+        "test": "installing_replacing_and_removing_the_binary_invalidate_version_status",
+        "checks": [
+          "new installation",
+          "changed binary",
+          "removed binary"
+        ]
+      },
+      {
+        "test": "a_failed_version_probe_is_retried_after_its_short_ttl_even_without_a_file_change",
+        "checks": [
+          "same mtime/size after chmod",
+          "failure TTL expiry"
+        ]
+      },
+      {
+        "test": "a_hung_version_probe_times_out_and_its_child_is_killed",
+        "checks": [
+          "timeout returns no banner",
+          "child PID no longer exists"
+        ]
+      },
+      {
+        "test": "cancelling_a_version_status_request_kills_the_probe_and_releases_singleflight",
+        "checks": [
+          "request task cancellation",
+          "child PID no longer exists",
+          "probe lock released"
+        ]
+      }
+    ],
+    "constraints": [
+      "The TTL is not a permanent availability cache.",
+      "The 30-second ceiling is a configured subprocess timeout, not a latency measurement.",
+      "Descriptor freshness preserves the existing external-binary provenance model; the cache does not claim binary identity beyond the engine's reported banner."
+    ]
+  },
+  "startup_health_regression": {
+    "new_tests_passed": 1,
+    "test": "state::tests::startup_deadline_covers_headers_and_json_and_releases_the_model_load_queue",
+    "source": "crates/misaka-studio-runtime/src/state.rs",
+    "configurations": [
+      "TCP accepted, no response headers",
+      "HTTP 200 headers received, JSON body never completes"
+    ],
+    "fixture_startup_budget_ms": 150,
+    "loads_per_configuration": 2,
+    "asserted": [
+      "Both loads return the existing startup-timeout error.",
+      "The second request starts after the first timeout, rather than remaining stuck in the model-load queue.",
+      "Both timed-out child processes are reaped.",
+      "The model-load lock is free and no model is marked loaded."
+    ],
+    "production_behavior": "The existing startup deadline covers the HTTP header and body awaits, and polling sleeps use only the remaining budget. No additional wait setting was introduced.",
+    "constraint": "The fixture budget tests termination behavior; it is not a real-model load-time measurement."
+  },
+  "existing_inference_integration_regressions": {
+    "passed": 12,
+    "failed": 0,
+    "suites": [
+      {
+        "name": "context_manager_512",
+        "passed": 3
+      },
+      {
+        "name": "continue_a_cut_off_reply",
+        "passed": 4
+      },
+      {
+        "name": "one_load_at_a_time",
+        "passed": 1
+      },
+      {
+        "name": "reasoning_passthrough",
+        "passed": 2
+      },
+      {
+        "name": "stop_a_looping_reply",
+        "passed": 2
+      }
+    ]
+  },
+  "checkpoints": [
+    {
+      "scope": "Runtime library immediately after cancellation/context/SSE changes",
+      "passed": 274,
+      "ignored": 1,
+      "ignored_reason": "Existing opt-in live testnet-12 preflight test"
+    },
+    {
+      "scope": "OpenAI child suite after version cache additions",
+      "passed": 28
+    },
+    {
+      "scope": "Health deadline and model-load queue regression after the final source change",
+      "passed": 1
+    }
+  ],
+  "evidence_logs": [
+    "phase3-inference-before.log",
+    "phase3-inference-after.log",
+    "phase3-inference-regressions.log",
+    "phase3-version-probe-tests.log",
+    "phase3-health-deadline-tests.log"
+  ],
+  "reporting_limits": [
+    "No real GPU token-throughput, first-token latency or UI paint/interaction benchmark was run for these changes.",
+    "Before/after comparison demonstrates cancellation failures being fixed; no millisecond multiplier is reported.",
+    "Process counts, event counts, parse counts, queue bounds and preserved behavior are the measured/asserted outcomes.",
+    "The root's final full test, Clippy and release-build gates are separate from these task checkpoints."
+  ]
+}

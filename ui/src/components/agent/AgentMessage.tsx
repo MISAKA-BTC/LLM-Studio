@@ -274,15 +274,23 @@ function Details({ name, args, call, status }: { name: string; args: Record<stri
 
 function ApprovalBar({ call, name, created }: { call: ToolCall; name: string; created: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
+  const introduced = useRef<string | null>(null)
   const workspace = useStudio((s) => s.conversations.find((c) => c.id === s.activeConversationId)?.workspace ?? null)
   useEffect(() => {
+    // Revealing a retained pane is not a new approval request. Do not move focus to an
+    // Enter-to-approve control merely because the person returned from another view.
+    if (introduced.current === call.id) return
     const bar = ref.current
     if (!bar) return
+    introduced.current = call.id
+    // Windowed history remounts rows while scrolling. Only an explicit review action may
+    // focus an approval there; remounting must never turn a subsequent Enter into approval.
+    if (bar.closest('[data-virtual-row]')) return
     bar.scrollIntoView({ block: 'nearest' })
     // Focus comes here so Enter approves — but not out of a text field: an Enter meant for the
     // next message must never approve a command.
     if (!isTypingTarget(document.activeElement)) bar.focus({ preventScroll: true })
-  }, [])
+  }, [call.id])
   const command = name === 'run_command'
   const browser = name === 'browser_click'
   const question = browser ? 'Allow this browser click?' : command
@@ -295,6 +303,7 @@ function ApprovalBar({ call, name, created }: { call: ToolCall; name: string; cr
   return (
     <div
       ref={ref}
+      data-approval-bar={call.id}
       tabIndex={-1}
       role="group"
       aria-label={question}

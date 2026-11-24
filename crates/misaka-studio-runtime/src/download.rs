@@ -15,7 +15,7 @@
 //! Cancelling keeps the partial file. The next attempt resumes it, which is what someone
 //! cancelling a download on a metered connection actually wants.
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogRepo, CatalogVariant, ModelFormat, install_directory};
 use crate::store::{ModelStore, Sidecar};
 use crate::{Error, Result};
 use misaka_studio_core::model::ModelSource;
@@ -80,6 +80,11 @@ impl DownloadProgress {
 struct Job {
     progress: DownloadProgress,
     cancel: Arc<AtomicBool>,
+}
+
+struct GroupProgress {
+    offset: u64,
+    expected_size: Option<u64>,
 }
 
 /// Every download, running or finished.
@@ -262,7 +267,7 @@ impl DownloadManager {
         };
 
         tokio::spawn(async move {
-            let outcome = manager.run(&id, url, token, destination.clone(), expected_sha256, cancel).await;
+            let outcome = manager.run(&id, url, token, destination.clone(), expected_sha256, cancel, None).await;
             match outcome {
                 Ok(digest) => {
                     let mut sidecar = Sidecar::load(&destination);
@@ -282,6 +287,145 @@ impl DownloadManager {
             }
         });
 
+        Ok(progress)
+    }
+
+    pub async fn start_variant(
+        self: &Arc<Self>,
+        catalog: &Catalog,
+        store: Arc<ModelStore>,
+        root: PathBuf,
+        repo: CatalogRepo,
+        variant: CatalogVariant,
+    ) -> Result<DownloadProgress> {
+        let revision = repo.revision.ok_or_else(|| Error::bad_request("Hugging Face did not provide an immutable revision"))?;
+        let destination =
+            install_directory(&root, &repo.id, &variant.id).ok_or_else(|| Error::bad_request("Invalid Hugging Face repository"))?;
+        let directory_name = destination.file_name().expect("catalog directory has a name").to_string_lossy();
+        let model_id = format!("{}--{}", repo.id.replace('/', "--"), &hex::encode(Sha256::digest(variant.id.as_bytes()))[..16]);
+        let stage_revision = hex::encode(Sha256::digest(revision.as_bytes()));
+        let stage = destination.with_file_name(format!(".{directory_name}-{}.part", &stage_revision[..16]));
+        let id = format!("catalog/{}/{}", repo.id.to_ascii_lowercase(), variant.id);
+        let first = &variant.files[0];
+        let model_path = if variant.format == ModelFormat::Mlx { destination.clone() } else { destination.join(&first.path) };
+        let (progress, cancel) = {
+            let mut jobs = self.jobs.write().await;
+            if let Some(job) = jobs.get(&id)
+                && matches!(job.progress.status, DownloadStatus::Downloading | DownloadStatus::Verifying)
+            {
+                return Ok(job.progress.clone());
+            }
+            if destination.exists() {
+                return Err(Error::bad_request("This download option is already installed"));
+            }
+            let progress = DownloadProgress {
+                id: id.clone(),
+                repo: repo.id.clone(),
+                file: variant.id.clone(),
+                model_id: model_id.clone(),
+                destination: model_path,
+                downloaded: 0,
+                total: variant.size,
+                bytes_per_second: 0.0,
+                status: DownloadStatus::Downloading,
+                error: None,
+            };
+            let cancel = Arc::new(AtomicBool::new(false));
+            jobs.insert(id.clone(), Job { progress: progress.clone(), cancel: cancel.clone() });
+            let _ = self.events.send(progress.clone());
+            (progress, cancel)
+        };
+
+        let downloads: Vec<_> =
+            variant.files.into_iter().map(|file| (catalog.download_url(&repo.id, &revision, &file.path), file)).collect();
+        let token = catalog.token().map(str::to_string);
+        let manager = self.clone();
+        let source = ModelSource {
+            repo: Some(repo.id),
+            revision: Some(revision),
+            filename: Some(variant.id),
+            base_repo: repo.base_model,
+            base_revision: None,
+            origin: Some("huggingface".into()),
+        };
+        tokio::spawn(async move {
+            let result = async {
+                tokio::fs::create_dir_all(&stage).await.map_err(|e| Error::io(stage.display(), e))?;
+                let canonical_stage = tokio::fs::canonicalize(&stage).await.map_err(|e| Error::io(stage.display(), e))?;
+                let canonical_root = tokio::fs::canonicalize(&root).await.map_err(|e| Error::io(root.display(), e))?;
+                let relative = stage.strip_prefix(&root).expect("stage is under models root");
+                if canonical_stage != canonical_root.join(relative) {
+                    return Err(Error::bad_request("The catalog destination contains a symbolic link"));
+                }
+                let mut offset = 0;
+                let mut sidecar = Sidecar { source, catalog_id: Some(model_id), ..Sidecar::default() };
+                for (url, file) in downloads {
+                    if cancel.load(Ordering::SeqCst) {
+                        return Err(Error::Cancelled);
+                    }
+                    let path = stage.join(&file.path);
+                    let parent = path.parent().expect("file is in staging directory");
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| Error::io(parent.display(), e))?;
+                    let canonical_parent = tokio::fs::canonicalize(parent).await.map_err(|e| Error::io(parent.display(), e))?;
+                    if canonical_parent != canonical_stage.join(parent.strip_prefix(&stage).expect("file is under stage")) {
+                        return Err(Error::bad_request("The catalog staging directory contains a symbolic link"));
+                    }
+                    for item in [&path, &part_path(&path)] {
+                        if tokio::fs::symlink_metadata(item).await.is_ok_and(|meta| !meta.is_file()) {
+                            return Err(Error::bad_request("The catalog staging directory contains a non-regular file"));
+                        }
+                    }
+                    manager
+                        .update(&id, |p| {
+                            p.status = DownloadStatus::Downloading;
+                            p.downloaded = offset;
+                        })
+                        .await;
+                    let digest = if reuse_staged(&path, file.size, file.sha256.as_deref()).await? {
+                        file.sha256
+                    } else {
+                        manager
+                            .run(
+                                &id,
+                                url,
+                                token.clone(),
+                                path.clone(),
+                                file.sha256,
+                                cancel.clone(),
+                                Some(GroupProgress { offset, expected_size: file.size }),
+                            )
+                            .await?
+                    };
+                    let size = tokio::fs::metadata(&path).await.map_err(|e| Error::io(path.display(), e))?.len();
+                    if variant.format == ModelFormat::Gguf && variant_size_is_single(&file.path) {
+                        sidecar.sha256 = digest;
+                        sidecar.hashed_size = Some(size);
+                    }
+                    offset += size;
+                    manager.update(&id, |p| p.downloaded = offset).await;
+                }
+                if cancel.load(Ordering::SeqCst) {
+                    return Err(Error::Cancelled);
+                }
+                let staged_model = if variant.format == ModelFormat::Mlx {
+                    stage.clone()
+                } else {
+                    stage.join(sidecar.source.filename.as_deref().expect("GGUF file"))
+                };
+                sidecar.save(&staged_model)?;
+                tokio::fs::rename(&stage, &destination).await.map_err(|e| Error::io(destination.display(), e))?;
+                if let Err(e) = store.refresh().await {
+                    tracing::warn!("model rescan after download failed: {e}");
+                }
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => manager.finish(&id, DownloadStatus::Completed, None).await,
+                Err(Error::Cancelled) => manager.finish(&id, DownloadStatus::Cancelled, None).await,
+                Err(e) => manager.finish(&id, DownloadStatus::Failed, Some(e.to_string())).await,
+            }
+        });
         Ok(progress)
     }
 
@@ -360,7 +504,7 @@ impl DownloadManager {
 
         let manager = self.clone();
         tokio::spawn(async move {
-            match manager.run(&id, url, None, destination, expected_sha256, cancel).await {
+            match manager.run(&id, url, None, destination, expected_sha256, cancel, None).await {
                 Ok(_) => manager.finish(&id, DownloadStatus::Completed, None).await,
                 Err(Error::Cancelled) => manager.finish(&id, DownloadStatus::Cancelled, None).await,
                 Err(e) => manager.finish(&id, DownloadStatus::Failed, Some(e.to_string())).await,
@@ -385,6 +529,7 @@ impl DownloadManager {
     }
 
     /// The transfer itself. Returns the verified digest when one could be established.
+    #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
         id: &str,
@@ -393,9 +538,27 @@ impl DownloadManager {
         destination: PathBuf,
         expected_sha256: Option<String>,
         cancel: Arc<AtomicBool>,
+        group: Option<GroupProgress>,
     ) -> Result<Option<String>> {
+        let offset = group.as_ref().map_or(0, |g| g.offset);
         let part = part_path(&destination);
-        let mut resume_from = tokio::fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
+        let partial_size = tokio::fs::metadata(&part).await.ok().map(|metadata| metadata.len());
+        let expected_size = group.as_ref().and_then(|group| group.expected_size);
+        if let (Some(received), Some(expected)) = (partial_size, expected_size) {
+            if received == expected {
+                let digest = self.verify_part(id, &part, expected_sha256, offset + received).await?;
+                if cancel.load(Ordering::SeqCst) {
+                    return Err(Error::Cancelled);
+                }
+                tokio::fs::rename(&part, &destination).await.map_err(|e| Error::io(destination.display(), e))?;
+                self.update(id, |p| p.downloaded = offset + received).await;
+                return Ok(digest);
+            }
+            if received > expected {
+                tokio::fs::remove_file(&part).await.map_err(|e| Error::io(part.display(), e))?;
+            }
+        }
+        let mut resume_from = partial_size.filter(|size| expected_size.is_none_or(|expected| *size < expected)).unwrap_or(0);
 
         let mut request = self.http.get(&url);
         if let Some(token) = &token {
@@ -428,8 +591,8 @@ impl DownloadManager {
 
         let total = response.content_length().map(|len| len + resume_from);
         self.update(id, |p| {
-            p.downloaded = resume_from;
-            if p.total.is_none() {
+            p.downloaded = offset + resume_from;
+            if group.is_none() && p.total.is_none() {
                 p.total = total;
             }
         })
@@ -464,7 +627,7 @@ impl DownloadManager {
             if last_emit.elapsed() >= PROGRESS_INTERVAL {
                 let rate = window_bytes as f64 / window_start.elapsed().as_secs_f64().max(0.001);
                 self.update(id, |p| {
-                    p.downloaded = downloaded;
+                    p.downloaded = offset + downloaded;
                     p.bytes_per_second = rate;
                 })
                 .await;
@@ -476,6 +639,23 @@ impl DownloadManager {
         file.flush().await.map_err(|e| Error::io(part.display(), e))?;
         drop(file);
 
+        if let Some(expected) = expected_size
+            && downloaded != expected
+        {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(Error::Download { message: format!("Expected {expected} bytes but received {downloaded}") });
+        }
+
+        let digest = self.verify_part(id, &part, expected_sha256, offset + downloaded).await?;
+        if group.is_some() && cancel.load(Ordering::SeqCst) {
+            return Err(Error::Cancelled);
+        }
+        tokio::fs::rename(&part, &destination).await.map_err(|e| Error::io(destination.display(), e))?;
+        self.update(id, |p| p.downloaded = offset + downloaded).await;
+        Ok(digest)
+    }
+
+    async fn verify_part(&self, id: &str, part: &Path, expected_sha256: Option<String>, downloaded: u64) -> Result<Option<String>> {
         let digest = match expected_sha256 {
             Some(expected) => {
                 self.update(id, |p| {
@@ -483,7 +663,7 @@ impl DownloadManager {
                     p.status = DownloadStatus::Verifying;
                 })
                 .await;
-                let path = part.clone();
+                let path = part.to_owned();
                 let actual = tokio::task::spawn_blocking(move || sha256_file_sync(&path))
                     .await
                     .map_err(|e| Error::Download { message: format!("verification did not run: {e}") })??;
@@ -491,7 +671,7 @@ impl DownloadManager {
                     // A file that fails its digest is not kept: resuming it would append to
                     // corrupt bytes forever, and keeping it invites a manual rename into the
                     // model directory.
-                    let _ = tokio::fs::remove_file(&part).await;
+                    let _ = tokio::fs::remove_file(part).await;
                     return Err(Error::Download {
                         message: format!(
                             "the downloaded file does not match the digest the repository published (expected {expected}, got {actual}); it has been discarded"
@@ -503,8 +683,6 @@ impl DownloadManager {
             None => None,
         };
 
-        tokio::fs::rename(&part, &destination).await.map_err(|e| Error::io(destination.display(), e))?;
-        self.update(id, |p| p.downloaded = downloaded).await;
         Ok(digest)
     }
 
@@ -529,6 +707,26 @@ impl DownloadManager {
         })
         .await;
     }
+}
+
+fn variant_size_is_single(path: &str) -> bool {
+    crate::catalog::gguf_shard(path).is_none_or(|(_, _, count)| count == 1)
+}
+
+async fn reuse_staged(path: &Path, size: Option<u64>, digest: Option<&str>) -> Result<bool> {
+    let Ok(metadata) = tokio::fs::metadata(path).await else { return Ok(false) };
+    if size.is_none_or(|expected| metadata.len() == expected) {
+        let Some(expected) = digest else { return Ok(size.is_some()) };
+        let owned = path.to_owned();
+        let actual = tokio::task::spawn_blocking(move || sha256_file_sync(&owned))
+            .await
+            .map_err(|e| Error::Download { message: e.to_string() })??;
+        if expected.eq_ignore_ascii_case(&actual) {
+            return Ok(true);
+        }
+    }
+    tokio::fs::remove_file(path).await.map_err(|e| Error::io(path.display(), e))?;
+    Ok(false)
 }
 
 impl Default for DownloadManager {
@@ -648,6 +846,58 @@ mod tests {
         assert_eq!(sidecar.source.revision.as_deref(), Some("abc123"));
         assert_eq!(sidecar.source.base_repo.as_deref(), Some("org/base"));
         assert_eq!(sidecar.sha256.as_deref(), Some(sha256_of(BODY).as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_snapshot_is_hidden_until_all_files_are_verified() {
+        let config = br#"{"model_type":"qwen3","quantization":{"bits":4}}"#;
+        let app = axum::Router::new().route(
+            "/{*path}",
+            get(move |axum::extract::Path(path): axum::extract::Path<String>| async move {
+                if path.ends_with("config.json") { config.as_slice() } else { BODY }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let catalog = Catalog::new(format!("http://{}", listener.local_addr().unwrap()), None);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let store = Arc::new(ModelStore::new(vec![root.clone()]));
+        let manager = Arc::new(DownloadManager::new());
+        let repo: CatalogRepo = serde_json::from_value(serde_json::json!({
+            "id": "org/repo", "revision": "abc123", "gated": false, "files": [], "variants": [],
+            "entry": {"id": "org/repo", "downloads": 0, "likes": 0, "gated": false},
+        }))
+        .unwrap();
+        let catalog_file = |path: &str, bytes: &[u8]| crate::catalog::CatalogFile {
+            path: path.to_string(),
+            size: Some(bytes.len() as u64),
+            sha256: Some(sha256_of(bytes)),
+            quantization: None,
+        };
+        let mut variant = CatalogVariant {
+            id: "mlx".into(),
+            format: ModelFormat::Mlx,
+            label: "4-bit".into(),
+            size: Some((config.len() + BODY.len()) as u64),
+            files: vec![catalog_file("config.json", config), catalog_file("model.safetensors", BODY)],
+        };
+        let verified = variant.files[1].sha256.replace("00".repeat(32));
+        let job = manager.start_variant(&catalog, store.clone(), root.clone(), repo.clone(), variant.clone()).await.unwrap();
+        wait_for(&manager, &job.id, DownloadStatus::Failed).await;
+        assert!(!job.destination.exists());
+        assert!(store.refresh().await.unwrap().is_empty());
+
+        variant.files[1].sha256 = verified;
+        manager.start_variant(&catalog, store.clone(), root, repo, variant).await.unwrap();
+        let done = wait_for(&manager, &job.id, DownloadStatus::Completed).await;
+        assert_eq!(done.total, Some(done.downloaded));
+        let model = store.require(&job.model_id).await.unwrap();
+        assert_eq!(model.source.repo.as_deref(), Some("org/repo"));
+        assert_eq!(model.source.revision.as_deref(), Some("abc123"));
+        assert_eq!(model.quantization.unwrap().label, "MLX-4bit");
+        store.delete(&job.model_id).await.unwrap();
+        assert!(!job.destination.exists());
     }
 
     /// The check that matters: a repository-published digest that does not match must discard

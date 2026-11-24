@@ -129,7 +129,15 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new(settings: Settings, settings_path: PathBuf, data_dir: PathBuf) -> Arc<Self> {
-        let hardware = HardwareSnapshot::probe();
+        // Hardware discovery can invoke driver tools. Keep it, and the monitor's first system
+        // snapshot, off the async workers that serve HTTP and streaming connections.
+        let (hardware, metrics) = tokio::task::spawn_blocking(|| {
+            let hardware = HardwareSnapshot::probe();
+            let metrics = MetricsHub::new(&hardware);
+            (hardware, metrics)
+        })
+        .await
+        .expect("hardware discovery task");
         let store = Arc::new(ModelStore::new(crate::backend::strata::model_roots(&settings)));
         if let Err(e) = store.refresh().await {
             tracing::warn!("initial model scan failed: {e}");
@@ -146,7 +154,6 @@ impl AppState {
         let catalog = Arc::new(Catalog::new(settings.huggingface.endpoint.clone(), settings.huggingface.token.clone()));
         let backend = build_backend(&settings, &hardware);
         let image_backend = build_image_backend(&settings);
-        let metrics = MetricsHub::new(&hardware);
 
         let mining = crate::mining_queue::MiningQueue::open(data_dir.join("mining-queue.json")).await;
         let engines = Arc::new(crate::engines::EngineInstaller::new(data_dir.join("engines").join("llama.cpp")));
@@ -490,6 +497,13 @@ impl AppState {
         }
         let configured =
             if configured.name() == "strata" { build_backend_kind(BackendKind::Auto, settings, &self.hardware) } else { configured };
+        if configured.name() != "mock" && model.path.is_dir() {
+            return if configured.name() == "mlx" {
+                configured
+            } else {
+                build_backend_kind(BackendKind::Mlx, settings, &self.hardware)
+            };
+        }
         let is_artifact = model.path.file_name().and_then(|n| n.to_str()).is_some_and(palw::is_artifact_filename);
         // In `Background` mode the chat is answered here and the gateway mines from the queue —
         // but only when the local integer runtime is actually installed. Otherwise the gateway
@@ -502,13 +516,16 @@ impl AppState {
             return build_backend_kind(BackendKind::Misaka, settings, &self.hardware);
         }
         let reads_artifacts = [MisakaBackend::NAME, crate::backend::gateway::NAME].contains(&configured.name());
+        if !is_artifact && configured.name() == "mlx" {
+            return build_backend_kind(BackendKind::LlamaCpp, settings, &self.hardware);
+        }
         if is_artifact == reads_artifacts {
             return configured;
         }
         let kind = if is_artifact {
             if settings.node.palw_gateway_url.is_some() && !prefer_local { BackendKind::Gateway } else { BackendKind::Misaka }
         } else {
-            BackendKind::Auto
+            BackendKind::LlamaCpp
         };
         build_backend_kind(kind, settings, &self.hardware)
     }
@@ -638,7 +655,7 @@ impl AppState {
     /// Compute and cache the model identity for the loaded model, hashing the file if needed.
     pub async fn resolve_identity(&self) -> Result<Option<ModelIdentity>> {
         let Some(state) = self.loaded().await else { return Ok(None) };
-        if state.backend == "strata" {
+        if state.backend == "strata" || !crate::store::single_file_identity(&state.model.path) {
             return Ok(None);
         }
         if let Some(identity) = state.identity {
@@ -770,14 +787,21 @@ impl AppState {
         let is_llama = backend.name() == "llamacpp";
         let counter = if prompt.is_none() { Some(self.token_counter_for(&state.model).await) } else { None };
         let mut report: Option<ContextReport> = None;
-        // Kept for a refusal's retry, which plans again from what the client sent.
-        let client_messages = if counter.is_some() { messages.clone() } else { Vec::new() };
+        // The original input is shared with CPU planning tasks and retained for a refusal's
+        // retry. Cloning an Arc here avoids copying a long history on the HTTP executor.
+        let client_messages = Arc::new(messages);
+        let pinned = Arc::new(pinned);
         let messages = match &counter {
             Some(counter) => {
-                let plan = match self.plan_context(&backend, &messages, &pinned, window, params.max_tokens, counter, 1000).await {
+                let plan = match self
+                    .plan_context(&backend, client_messages.clone(), pinned.clone(), window, params.max_tokens, counter.clone(), 1000)
+                    .await
+                {
                     Ok(plan) => plan,
                     Err(error) if is_llama && window > 0 => {
-                        compact_llama_chat(&messages, &pinned, window, params.max_tokens, 1, counter).ok_or(error)?
+                        compact_llama_chat(client_messages.clone(), pinned.clone(), window, params.max_tokens, 1, counter.clone())
+                            .await?
+                            .ok_or(error)?
                     }
                     Err(error) => return Err(error),
                 };
@@ -794,7 +818,7 @@ impl AppState {
                 report = Some(plan.report);
                 plan.messages
             }
-            None => messages,
+            None => client_messages.as_ref().clone(),
         };
 
         let mut request = GenerationRequest {
@@ -807,7 +831,7 @@ impl AppState {
             disable_thinking,
         };
 
-        self.metrics.generation_started();
+        let mut generation_metrics = GenerationMetrics::start(self.metrics.clone());
         let started = Instant::now();
         let started_at_unix_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
 
@@ -830,7 +854,18 @@ impl AppState {
                         1100
                     };
                     let window = if window == 0 { limit } else { window.min(limit) };
-                    match self.plan_context(&backend, &client_messages, &pinned, window, params.max_tokens, counter, scale).await {
+                    match self
+                        .plan_context(
+                            &backend,
+                            client_messages.clone(),
+                            pinned.clone(),
+                            window,
+                            params.max_tokens,
+                            counter.clone(),
+                            scale,
+                        )
+                        .await
+                    {
                         Ok(plan) if plan.report.prompt_tokens < sent.prompt_tokens => {
                             tracing::info!(limit, engine_count, scale, "retrying with a smaller chat context");
                             request.messages = plan.messages;
@@ -850,8 +885,15 @@ impl AppState {
                         // An oversized system prompt, attachment, or tool result can exhaust the
                         // window without any old history. Retry with bounded excerpts of those inputs.
                         for reduction in [1, 2, 4] {
-                            let Some(plan) =
-                                compact_llama_chat(&client_messages, &pinned, window, params.max_tokens, reduction, counter)
+                            let Some(plan) = compact_llama_chat(
+                                client_messages.clone(),
+                                pinned.clone(),
+                                window,
+                                params.max_tokens,
+                                reduction,
+                                counter.clone(),
+                            )
+                            .await?
                             else {
                                 break;
                             };
@@ -874,13 +916,7 @@ impl AppState {
             }
         }
         .await;
-        let (mut inner, first) = match attempt {
-            Ok(generation) => generation,
-            Err(error) => {
-                self.metrics.generation_finished(0, 0.0, 0);
-                return Err(error);
-            }
-        };
+        let (mut inner, first) = attempt?;
 
         // Commit to the messages that actually reached the model, including after a retry.
         let prompt_bytes = match &request.prompt {
@@ -902,7 +938,11 @@ impl AppState {
 
             while let Some(event) = match pending_first.take() {
                 Some(e) => Some(e),
-                None => inner.next().await,
+                None => tokio::select! {
+                    biased;
+                    _ = tx.closed() => None,
+                    event = inner.next() => event,
+                },
             } {
                 let mut is_delta = false;
                 match &event {
@@ -961,7 +1001,7 @@ impl AppState {
             let duration_ms = started.elapsed().as_millis() as u64;
             let ttft = first_token.map(|d| d.as_millis() as u64);
             let tps = if duration_ms > 0 { usage.completion_tokens as f64 * 1000.0 / duration_ms as f64 } else { 0.0 };
-            app.metrics.generation_finished(usage.completion_tokens, tps, ttft.unwrap_or(0));
+            generation_metrics.finish(usage.completion_tokens, tps, ttft.unwrap_or(0));
             app.record(&state, &prompt_bytes, &text, usage, started_at_unix_ms, duration_ms, ttft, params).await;
         });
 
@@ -974,23 +1014,27 @@ impl AppState {
     async fn plan_context(
         &self,
         backend: &SharedBackend,
-        messages: &[ChatMessage],
-        pinned: &[String],
+        messages: Arc<Vec<ChatMessage>>,
+        pinned: Arc<Vec<String>>,
         window: u64,
         max_tokens: u64,
-        counter: &TokenCounter,
+        counter: Arc<TokenCounter>,
         scale_permille: u64,
     ) -> Result<ContextPlan> {
         let continues = backend.continues_assistant_turn();
-        let draft = crate::context::plan(&PlanInputs {
-            messages,
-            pinned,
-            window,
-            max_tokens,
-            counter,
-            engine_continues_turns: continues,
-            count_scale_permille: scale_permille,
+        let planning_counter = counter.clone();
+        let draft = crate::context::work::run(move || {
+            crate::context::plan(&PlanInputs {
+                messages: &messages,
+                pinned: &pinned,
+                window,
+                max_tokens,
+                counter: &planning_counter,
+                engine_continues_turns: continues,
+                count_scale_permille: scale_permille,
+            })
         })
+        .await?
         .map_err(|message| Error::BadRequest { message })?;
 
         let (supplied, note) = if draft.wants_memory() {
@@ -1018,21 +1062,25 @@ impl AppState {
         } else {
             (None, None)
         };
-        let mut plan = draft.finish(supplied, counter, note);
-        plan.report.backend = backend.name().to_string();
+        let backend_name = backend.name();
+        crate::context::work::run(move || {
+            let mut plan = draft.finish(supplied, &counter, note);
+            plan.report.backend = backend_name.to_string();
 
-        // A cut-off reply for an engine that closes every turn: the question and the reply's end,
-        // spelled as one instruction (see `continuation_as_instruction`).
-        if plan.report.continuation && !continues {
-            let budget = plan.report.prompt_budget;
-            let rewritten = crate::backend::continuation_as_instruction(&plan.messages, budget, counter)
-                .map_err(|message| Error::BadRequest { message })?;
-            plan.report.prompt_tokens = counter.messages(&rewritten);
-            plan.report.managed = true;
-            plan.report.sent = Some(rewritten.clone());
-            plan.messages = rewritten;
-        }
-        Ok(plan)
+            // A cut-off reply for an engine that closes every turn: the question and the reply's
+            // end, spelled as one instruction (see `continuation_as_instruction`).
+            if plan.report.continuation && !continues {
+                let budget = plan.report.prompt_budget;
+                let rewritten = crate::backend::continuation_as_instruction(&plan.messages, budget, &counter)
+                    .map_err(|message| Error::BadRequest { message })?;
+                plan.report.prompt_tokens = counter.messages(&rewritten);
+                plan.report.managed = true;
+                plan.report.sent = Some(rewritten.clone());
+                plan.messages = rewritten;
+            }
+            Ok(plan)
+        })
+        .await?
     }
 
     /// **The counter for this model's tokens**: its tokenizer when one is at hand, the estimate
@@ -1195,6 +1243,33 @@ impl AppState {
                 model_id: Some(state.model.id.clone()),
             })
             .await;
+    }
+}
+
+/// A request can be dropped while the backend is still accepting it or waiting for its first
+/// token, before the forwarding task exists. Account for that path too, exactly once.
+struct GenerationMetrics {
+    metrics: Arc<MetricsHub>,
+    finished: bool,
+}
+
+impl GenerationMetrics {
+    fn start(metrics: Arc<MetricsHub>) -> Self {
+        metrics.generation_started();
+        Self { metrics, finished: false }
+    }
+
+    fn finish(&mut self, tokens: u64, tps: f64, ttft: u64) {
+        self.metrics.generation_finished(tokens, tps, ttft);
+        self.finished = true;
+    }
+}
+
+impl Drop for GenerationMetrics {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.metrics.generation_finished(0, 0.0, 0);
+        }
     }
 }
 
@@ -1442,20 +1517,23 @@ async fn start_generation(backend: &SharedBackend, request: GenerationRequest) -
     Ok((stream, first))
 }
 
-fn compact_llama_chat(
-    messages: &[ChatMessage],
-    pinned: &[String],
+async fn compact_llama_chat(
+    messages: Arc<Vec<ChatMessage>>,
+    pinned: Arc<Vec<String>>,
     window: u64,
     max_tokens: u64,
     reduction: u64,
-    counter: &TokenCounter,
-) -> Option<ContextPlan> {
+    counter: Arc<TokenCounter>,
+) -> Result<Option<ContextPlan>> {
     // The model's byte-level tokenizer can normally encode at least one byte per token.
     // Leave room for the chat template and reply, and shrink again if the engine still refuses.
     let bytes = window.saturating_sub(crate::backend::answer_room(max_tokens, window)).saturating_sub(128) / reduction;
-    (bytes >= 64)
-        .then(|| crate::context::compact_required_chat(messages, pinned, window, max_tokens, bytes as usize, counter))
-        .flatten()
+    crate::context::work::run(move || {
+        (bytes >= 64)
+            .then(|| crate::context::compact_required_chat(&messages, &pinned, window, max_tokens, bytes as usize, &counter))
+            .flatten()
+    })
+    .await
 }
 
 fn context_overflow(window: u64, messages: &[ChatMessage]) -> Error {
@@ -1473,6 +1551,130 @@ fn context_overflow(window: u64, messages: &[ChatMessage]) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    struct HealthDeadlineBackend(crate::backend::openai_child::ChildEngine);
+
+    #[cfg(unix)]
+    impl crate::backend::InferenceBackend for HealthDeadlineBackend {
+        fn name(&self) -> &'static str {
+            "health-test"
+        }
+        fn descriptor(&self) -> futures_util::future::BoxFuture<'_, misaka_studio_core::provenance::RuntimeDescriptor> {
+            Box::pin(self.0.descriptor("cpu"))
+        }
+        fn availability(&self) -> futures_util::future::BoxFuture<'_, crate::backend::Availability> {
+            Box::pin(async { crate::backend::Availability::Available { detail: "test engine".into() } })
+        }
+        fn load(&self, request: LoadRequest) -> futures_util::future::BoxFuture<'_, Result<LoadedModel>> {
+            Box::pin(self.0.load(request))
+        }
+        fn unload(&self) -> futures_util::future::BoxFuture<'_, Result<()>> {
+            Box::pin(self.0.unload())
+        }
+        fn loaded(&self) -> futures_util::future::BoxFuture<'_, Option<LoadedModel>> {
+            Box::pin(self.0.loaded())
+        }
+        fn generate(
+            &self,
+            request: GenerationRequest,
+        ) -> futures_util::future::BoxFuture<'_, Result<BoxStream<'static, Result<StreamEvent>>>> {
+            Box::pin(self.0.generate(request))
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_deadline_covers_headers_and_json_and_releases_the_model_load_queue() {
+        use crate::backend::openai_child::{ChildEngine, ChildEngineConfig};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for send_headers in [false, true] {
+            let data = tempfile::tempdir().unwrap();
+            let models = data.path().join("models");
+            std::fs::create_dir(&models).unwrap();
+            let mut gguf = b"GGUF".to_vec();
+            gguf.extend(3u32.to_le_bytes());
+            gguf.extend(0u64.to_le_bytes());
+            gguf.extend(1u64.to_le_bytes());
+            gguf.extend(("general.architecture".len() as u64).to_le_bytes());
+            gguf.extend(b"general.architecture");
+            gguf.extend(8u32.to_le_bytes());
+            gguf.extend(5u64.to_le_bytes());
+            gguf.extend(b"qwen3");
+            std::fs::write(models.join("health-test.gguf"), gguf).unwrap();
+            let settings = Settings {
+                models_dir: models,
+                backend: misaka_studio_core::settings::BackendSettings { kind: BackendKind::Mock, ..Default::default() },
+                ..Default::default()
+            };
+            let state = AppState::new(settings, data.path().join("settings.json"), data.path().to_path_buf()).await;
+            let starts = Arc::new(AtomicUsize::new(0));
+            let servers = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let child_starts = starts.clone();
+            let child_servers = servers.clone();
+            let pid_dir = data.path().to_path_buf();
+            let engine = ChildEngine::new(ChildEngineConfig {
+                name: "health-test",
+                program: PathBuf::from("/bin/sh"),
+                args: Box::new(move |_, port| {
+                    let index = child_starts.fetch_add(1, Ordering::SeqCst);
+                    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+                    listener.set_nonblocking(true).unwrap();
+                    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                    let server = tokio::spawn(async move {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let mut request = Vec::new();
+                        let mut chunk = [0; 1024];
+                        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                            let count = socket.read(&mut chunk).await.unwrap();
+                            assert!(count > 0, "health client closed before completing its headers");
+                            request.extend_from_slice(&chunk[..count]);
+                            assert!(request.len() <= 8192, "fixture health request headers are bounded");
+                        }
+                        if send_headers {
+                            socket
+                                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{")
+                                .await
+                                .unwrap();
+                        }
+                        let _keep_open = socket;
+                        std::future::pending::<()>().await;
+                    });
+                    child_servers.lock().unwrap().push(server);
+                    let pid_file = pid_dir.join(format!("pid-{index}"));
+                    let quoted = format!("'{}'", pid_file.to_string_lossy().replace('\'', "'\\''"));
+                    vec!["-c".into(), format!("printf '%s' \"$$\" > {quoted}; exec sleep 30")]
+                }),
+                health_path: "/health",
+                context_from_health: None,
+                startup_timeout: Duration::from_millis(150),
+                env: vec![],
+                offload_from_log: None,
+            });
+            *state.backend.write().await = Arc::new(HealthDeadlineBackend(engine));
+            let results = tokio::time::timeout(Duration::from_secs(2), async {
+                tokio::join!(state.load("health-test", None), state.load("health-test", None))
+            })
+            .await
+            .expect("the first failed load must release the queue for the next request");
+            for result in [results.0, results.1] {
+                assert!(result.unwrap_err().to_string().contains("engine did not become ready"));
+            }
+            assert_eq!(starts.load(Ordering::SeqCst), 2);
+            assert!(state.load_lock.try_lock().is_ok());
+            assert!(state.loaded().await.is_none());
+            for index in 0..2 {
+                let pid: i32 = std::fs::read_to_string(data.path().join(format!("pid-{index}"))).unwrap().parse().unwrap();
+                assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "the timed-out engine must be reaped");
+                assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+            }
+            for server in servers.lock().unwrap().drain(..) {
+                server.abort();
+            }
+        }
+    }
 
     /// Both directions of the same mistake. On 2026-09-04 only the first existed as a check, and
     /// only after a `.palwart` reached `llama-server`, which read `PALW` where `GGUF` should be and

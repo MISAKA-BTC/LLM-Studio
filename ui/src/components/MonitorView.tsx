@@ -8,37 +8,25 @@
 // it is sixty numbers and two axes, and a charting dependency would be larger than the runtime
 // binary's own metrics code.
 
-import { useEffect, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { bytes, duration } from '../lib/format'
 import { useStudio } from '../store/studio'
 import { EmptyState, Meter, Stat } from './common'
 import { ProvenancePanel } from './Provenance'
 
-/** How many samples the sparklines keep. At one sample a second, two minutes of history. */
-const HISTORY = 120
-
 export function MonitorView() {
   const sample = useStudio((s) => s.sample)
+  const history = useStudio((s) => s.sampleHistory)
   const system = useStudio((s) => s.system)
   const runtime = useStudio((s) => s.runtime)
   const models = useStudio((s) => s.models)
   const hashModel = useStudio((s) => s.hashModel)
   const [hashing, setHashing] = useState(false)
 
-  const cpuHistory = useRef<number[]>([])
-  const memHistory = useRef<number[]>([])
-  const [, forceRender] = useState(0)
-
-  useEffect(() => {
-    if (!sample) return
-    const push = (ring: number[], value: number) => {
-      ring.push(value)
-      if (ring.length > HISTORY) ring.shift()
-    }
-    push(cpuHistory.current, sample.hardware.cpu_percent)
-    push(memHistory.current, (sample.hardware.memory_used / Math.max(1, sample.hardware.memory_total)) * 100)
-    forceRender((n) => n + 1)
-  }, [sample])
+  // Sampling belongs to the window, outside Activity. Rendering a chart neither records a
+  // duplicate sample on reveal nor loses the measurements received while it was hidden.
+  const cpuHistory = useMemo(() => history.map((s) => s.hardware.cpu_percent), [history])
+  const memHistory = useMemo(() => history.map((s) => s.hardware.memory_used / Math.max(1, s.hardware.memory_total) * 100), [history])
 
   if (!system) {
     return <EmptyState icon="gauge" title="Waiting for the runtime">Nothing to show until the runtime answers.</EmptyState>
@@ -69,8 +57,8 @@ export function MonitorView() {
           <div className="card p-4">
             <h3 className="text-sm font-semibold">Last two minutes</h3>
             <div className="mt-4 space-y-4">
-              <Sparkline label="CPU" values={cpuHistory.current} max={100} suffix="%" />
-              <Sparkline label="Memory" values={memHistory.current} max={100} suffix="%" />
+              <Sparkline label="CPU" values={cpuHistory} max={100} suffix="%" />
+              <Sparkline label="Memory" values={memHistory} max={100} suffix="%" />
             </div>
           </div>
 

@@ -6,6 +6,10 @@
    system. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+.workbench-tabs { scrollbar-width: thin; scrollbar-color: var(--color-ink-400) transparent; }
+.workbench-tabs::-webkit-scrollbar { height: 3px; }
+.workbench-tabs::-webkit-scrollbar-thumb { background: var(--color-ink-400); }
+
 @theme {
   --color-ink-50: oklch(0.98 0.004 265);
   --color-ink-100: oklch(0.95 0.006 265);

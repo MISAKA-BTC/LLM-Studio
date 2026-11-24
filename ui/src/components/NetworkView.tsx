@@ -19,6 +19,7 @@ import { PromptMiningPanel } from './PromptMiningPanel'
 import { RemoteMinerPanel } from './RemoteMinerPanel'
 import { PromptStackPanel } from './PromptStackPanel'
 import { api } from '../lib/api'
+import { useVisiblePolling } from './shell/useVisiblePolling'
 import { bytes, count } from '../lib/format'
 import type { NetworkOverview, NodeClassRow, NodeStatus, PalwClassStatus, Settings } from '../lib/types'
 import { useStudio } from '../store/studio'
@@ -31,34 +32,9 @@ export function NetworkView() {
   const settings = useStudio((s) => s.settings)
   const saveSettings = useStudio((s) => s.saveSettings)
   const setDownload = useStudio((s) => s.setDownload)
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
-  // One read at a time. The overview probes the public nodes and can take longer than the poll
-  // interval (measured: 10.8 s with no node reachable), and overlapping reads piled up until they
-  // held every connection the browser allows to this host — after which the chat's own requests
-  // queued behind them and the whole window looked hung.
-  const reading = useRef(false)
-
-  const refresh = useCallback(async () => {
-    if (reading.current) return
-    reading.current = true
-    try {
-      setOverview(await api.network())
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      reading.current = false
-    }
-  }, [])
-
-  // Poll while the tab is open: the chain moves on its own, and a static snapshot of it is stale by definition.
-  useEffect(() => {
-    void refresh()
-    timer.current = setInterval(() => void refresh(), 10_000)
-    return () => {
-      if (timer.current) clearInterval(timer.current)
-    }
-  }, [refresh])
+  const acceptOverview = useCallback((value: NetworkOverview) => { setOverview(value); setError(null) }, [])
+  const readFailed = useCallback((error: unknown) => setError(error instanceof Error ? error.message : String(error)), [])
+  useVisiblePolling(api.network, acceptOverview, 10_000, readFailed)
 
   const downloadArtifact = async (name: string) => {
     try {
@@ -158,8 +134,16 @@ function NetworkSettingsPanel({ settings, save }: { settings: Settings; save: (s
   const [draft, setDraft] = useState(settings.node)
   const [keyBusy, setKeyBusy] = useState(false)
   const [keyError, setKeyError] = useState<string | null>(null)
-  useEffect(() => setDraft(settings.node), [settings.node])
-  const dirty = JSON.stringify(draft) !== JSON.stringify(settings.node)
+  const savedKey = JSON.stringify(settings.node)
+  const appliedSavedKey = useRef(savedKey)
+  useEffect(() => {
+    // Preserve unfinished edits when Activity resumes this view, and when the runtime returns
+    // an equivalent settings object after saving an unrelated section.
+    if (appliedSavedKey.current === savedKey) return
+    appliedSavedKey.current = savedKey
+    setDraft(settings.node)
+  }, [settings.node, savedKey])
+  const dirty = JSON.stringify(draft) !== savedKey
   const set = <K extends keyof Settings['node']>(key: K, value: Settings['node'][K]) => setDraft({ ...draft, [key]: value })
   const text = (value: string) => (value.trim() === '' ? null : value.trim())
 

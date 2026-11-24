@@ -1,19 +1,8 @@
-// Navigation and threads, for whichever side of the window is in view.
-//
-// The window has two sides, as in Claude's desktop app, and the switch at the top says which:
-// **Chat** lists conversations by date; **Code** lists agent sessions under the folder each works
-// in, like Claude Code. The rest of the window — Models, Image, Network (where mining is set up),
-// Monitor, Settings — is the same from both sides, kept small at the bottom so the threads get the
-// room.
-//
-// The connection dot is not decoration: this window talks to a separate process, and when that
-// process is not there every other part of the UI is showing stale data. Saying so in one place,
-// permanently, beats a toast that has already faded by the time someone looks up.
-//
-// Collapsed, the sidebar becomes a rail of icons rather than nothing at all: a sidebar that can
-// only be brought back with a shortcut is one a person who never learnt the shortcut loses.
+// A permanent Activity Bar and a separately retained, resizable navigation sidebar.
+// Chat conversations and Code project sessions share a bounded row viewport; switching sides
+// pauses the hidden list without discarding its scroll position or in-progress rename.
 
-import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import logo from '../assets/llm-studio.png'
 import { useAgent } from '../lib/agent/run'
 import { useWorkspaceInfo } from '../lib/agent/workspace'
@@ -43,16 +32,11 @@ import { NEW_CHAT_HINT, SHORTCUTS, SIDE_ICONS, SIDE_LABELS, SIDE_SHORTCUTS, VIEW
 import { sideOf, threadsOf } from './shell/sides'
 import { groupThreads, threadMining } from './shell/threads'
 import { useNewSessionProject } from './shell/useSessionProject'
+import { RetainedView } from './shell/RetainedView'
+import { VirtualSidebar, type SidebarItem } from './shell/VirtualSidebar'
 
 /** The views beside the threads. The thread view itself is the switch's; Settings is in the footer. */
 const NAV: View[] = ['models', 'image', 'network', 'monitor']
-
-const NAV_NOTES: Partial<Record<View, string>> = {
-  models: 'find, download and load models',
-  image: 'generate images',
-  network: 'prompt mining setup, the classes and the chain',
-  monitor: 'this machine and the engine, live',
-}
 
 const SIDES: AppMode[] = ['chat', 'code']
 
@@ -65,7 +49,58 @@ const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', d
 
 export function Sidebar() {
   const open = useUi((s) => s.sidebarOpen)
-  return open ? <ExpandedSidebar /> : <SidebarRail />
+  return <><SidebarRail /><RetainedView active={open}><ResizableSidebar /></RetainedView></>
+}
+
+function ResizableSidebar() {
+  const savedWidth = useUi((s) => s.sidebarWidth)
+  const width = Number.isFinite(savedWidth) ? Math.max(200, Math.min(420, savedWidth)) : 256
+  const pane = useRef<HTMLDivElement>(null)
+  const stop = useRef<(() => void) | null>(null)
+  useLayoutEffect(() => () => stop.current?.(), [])
+  const resize = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    stop.current?.()
+    const start = event.clientX
+    const initial = pane.current?.getBoundingClientRect().width || width
+    const cursor = document.body.style.cursor
+    const select = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    let next = initial
+    const move = (e: globalThis.PointerEvent) => {
+      next = Math.max(200, Math.min(420, initial + e.clientX - start))
+      if (pane.current) pane.current.style.width = `${next}px`
+    }
+    const cleanup = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', done)
+      window.removeEventListener('pointercancel', cancel)
+      window.removeEventListener('blur', cancel)
+      document.body.style.cursor = cursor
+      document.body.style.userSelect = select
+      stop.current = null
+    }
+    const done = () => { cleanup(); useUi.getState().setSidebarWidth(next) }
+    const cancel = () => { cleanup(); if (pane.current) pane.current.style.width = `${width}px` }
+    stop.current = cancel
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', done)
+    window.addEventListener('pointercancel', cancel)
+    window.addEventListener('blur', cancel)
+  }
+  return <div ref={pane} className="relative h-full shrink-0" style={{ width, maxWidth: 'calc(100vw - 96px)' }}>
+    <ExpandedSidebar />
+    <div role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={200} aria-valuemax={420} aria-valuenow={width} tabIndex={0}
+      className="absolute -right-0.5 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-arc-500 focus-visible:bg-arc-500 focus-visible:outline-none"
+      onPointerDown={resize} onDoubleClick={() => useUi.getState().setSidebarWidth(256)}
+      onKeyDown={(event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+        event.preventDefault()
+        useUi.getState().setSidebarWidth(event.key === 'Home' ? 200 : event.key === 'End' ? 420 : width + (event.key === 'ArrowRight' ? 10 : -10))
+      }} />
+  </div>
 }
 
 function useActiveDownloads(): number {
@@ -104,78 +139,20 @@ function ActivityDot({ activity, className = '' }: { activity: Activity; classNa
 
 function ExpandedSidebar() {
   const toggleSidebar = useUi((s) => s.toggleSidebar)
-  const openPalette = useUi((s) => s.openPalette)
   const side = useUi((s) => s.appMode)
-
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-ink-200 bg-white dark:border-ink-800 dark:bg-ink-900" aria-label="Sidebar">
-      <div className="flex h-11 shrink-0 items-center gap-2 pl-3.5 pr-2">
-        {/* The project's own mark, not a letter in a box. It carries its own colour in both
-            themes, so it is drawn at its native aspect rather than cropped into a square. */}
-        <img src={logo} alt="" className="h-6 w-auto shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-[0.85rem] font-semibold tracking-tight">LLM Studio</span>
+    <aside className="flex h-full w-full flex-col border-r border-ink-200 bg-ink-50 dark:border-ink-800 dark:bg-ink-900" aria-label="Sidebar">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-ink-200 pl-4 pr-1 dark:border-ink-800">
+        <span className="min-w-0 flex-1 truncate text-[0.65rem] font-semibold uppercase tracking-wider text-ink-500">{side === 'code' ? 'Explorer' : 'Conversations'}</span>
         <IconButton icon="panelLeft" label="Collapse sidebar" shortcut={SHORTCUTS.toggleSidebar} onClick={toggleSidebar} />
       </div>
-
-      <div className="shrink-0 px-2 pb-2">
-        <SideSwitch />
+      <div className="shrink-0 space-y-px px-1 py-1">
+        {side === 'chat' ? <SidebarButton icon="compose" label="New chat" shortcut={NEW_CHAT_HINT} onClick={newChat} /> : <><NewSessionButton /><SidebarButton icon="folderOpen" label="Open folder…" title="Open a folder and start a session in it" onClick={openFolder} /></>}
+        <SidebarButton icon="search" label="Find files and conversations" shortcut={SHORTCUTS.quickOpen} onClick={() => useUi.getState().setQuickOpen(true)} />
       </div>
-
-      <div className="shrink-0 space-y-px px-2 pb-1">
-        {side === 'chat' ? (
-          <SidebarButton icon="compose" label="New chat" shortcut={NEW_CHAT_HINT} onClick={newChat} />
-        ) : (
-          <>
-            <NewSessionButton />
-            <SidebarButton icon="folderOpen" label="Open folder…" title="Open a folder and start a session in it" onClick={openFolder} />
-          </>
-        )}
-        <SidebarButton icon="search" label="Search" shortcut={SHORTCUTS.palette} onClick={() => openPalette()} />
-      </div>
-
-      {side === 'chat' ? <ChatThreadList /> : <ProjectList />}
-
-      <div className="shrink-0 border-t border-ink-200 dark:border-ink-800">
-        <NavGrid />
-        <SidebarFooter />
-      </div>
+      <RetainedView active={side === 'chat'}><ChatThreadList /></RetainedView>
+      <RetainedView active={side === 'code'}><ProjectList /></RetainedView>
     </aside>
-  )
-}
-
-/**
- * Chat | Code, as in Claude's desktop app. The side in view is the raised one; the other carries a
- * light while something is going on there. Clicking the side in view is the way back to its thread
- * from Models or Network.
- */
-function SideSwitch() {
-  const side = useUi((s) => s.appMode)
-  const view = useStudio((s) => s.view)
-  const activity = useSideActivity()
-  return (
-    <div className="grid grid-cols-2 gap-0.5 rounded-lg bg-ink-100 p-0.5 dark:bg-ink-800" role="group" aria-label="Chat or Code">
-      {SIDES.map((mode) => {
-        const on = side === mode
-        return (
-          <button
-            key={mode}
-            type="button"
-            aria-pressed={on}
-            title={sideTitle(mode, on ? null : activity[mode])}
-            onClick={() => switchAppMode(mode)}
-            className={`relative flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-md text-[0.8rem] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-500/40 ${
-              on
-                ? `bg-white shadow-sm shadow-ink-950/5 dark:bg-ink-950 ${view === 'chat' ? 'text-ink-900 dark:text-ink-50' : 'text-ink-700 dark:text-ink-200'}`
-                : 'text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100'
-            }`}
-          >
-            <Icon name={SIDE_ICONS[mode]} className="size-3.5 shrink-0" />
-            {SIDE_LABELS[mode]}
-            {!on && <ActivityDot activity={activity[mode]} className="right-2 top-1/2 -translate-y-1/2" />}
-          </button>
-        )
-      })}
-    </div>
   )
 }
 
@@ -223,75 +200,31 @@ function NewSessionButton() {
 
 // --- the lists -------------------------------------------------------------------------------------
 
-const ROWS = '[data-thread-row], [data-project-row]'
-
-/** Up and down walk the rows like a list, once one of them has the focus; left from a session goes
- *  to its project's name. */
-function onListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-  const target = event.target as HTMLElement
-  if (!target.matches(ROWS)) return
-  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(ROWS))
-    const next = rows[rows.indexOf(target) + (event.key === 'ArrowDown' ? 1 : -1)]
-    if (next) {
-      event.preventDefault()
-      next.focus()
-    }
-  } else if (event.key === 'ArrowLeft' && target.matches('[data-thread-row]')) {
-    const header = target.closest('[data-project-group]')?.querySelector<HTMLElement>('[data-project-row]')
-    if (header) {
-      event.preventDefault()
-      header.focus()
-    }
-  }
-}
-
 function runningOf(id: string, agentRun: { conversationId: string; status: string } | null, streamingId: string | null): Activity {
   if (agentRun?.conversationId === id) return agentRun.status === 'awaiting_approval' ? 'approval' : 'running'
   return streamingId === id ? 'running' : null
 }
 
 /** Chat's side: the conversations, starred first and then by date — as the sidebar always listed them. */
+type ChatNavItem = SidebarItem & ({ kind: 'heading'; label: string } | { kind: 'thread'; conversation: Conversation })
+
 function ChatThreadList() {
   const conversations = useStudio((s) => s.conversations)
   const activeId = useStudio((s) => s.activeConversationId)
   const view = useStudio((s) => s.view)
   const streamingId = useStudio((s) => s.streaming?.conversationId ?? null)
   const agentRun = useAgent((s) => s.run)
-  const groups = useMemo(() => groupThreads(threadsOf(conversations, 'chat')), [conversations])
-
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" onKeyDown={onListKeyDown}>
-      {groups.length === 0 && (
-        <p className="px-2.5 py-4 text-[0.8rem] leading-relaxed text-ink-500 dark:text-ink-400">
-          No chats yet. Start one with <Kbd shortcut={NEW_CHAT_HINT} />.
-        </p>
-      )}
-      {groups.map((group) => (
-        <section key={group.id} aria-label={group.label}>
-          <h3 className="sticky top-0 z-[1] bg-white px-2.5 pb-1 pt-3 text-[0.65rem] font-semibold uppercase tracking-wide text-ink-400 dark:bg-ink-900 dark:text-ink-500">
-            {group.label}
-          </h3>
-          <ul className="space-y-px">
-            {group.threads.map((conversation) => {
-              const mining = threadMining(conversation)
-              return (
-                <ThreadRow
-                  key={conversation.id}
-                  conversation={conversation}
-                  kind="chat"
-                  active={view === 'chat' && conversation.id === activeId}
-                  running={runningOf(conversation.id, agentRun, streamingId)}
-                  pending={mining.pending}
-                  committed={mining.committed}
-                />
-              )
-            })}
-          </ul>
-        </section>
-      ))}
-    </div>
-  )
+  const items = useMemo(() => groupThreads(threadsOf(conversations, 'chat')).flatMap<ChatNavItem>((group) => [
+    { key: `heading:${group.id}`, kind: 'heading', label: group.label, selectable: false },
+    ...group.threads.map((conversation): ChatNavItem => ({ key: conversation.id, kind: 'thread', conversation, selectable: true })),
+  ]), [conversations])
+  if (!items.length) return <p className="flex-1 px-4 py-4 text-xs text-ink-500">No chats yet. Start one with <Kbd shortcut={NEW_CHAT_HINT} />.</p>
+  return <VirtualSidebar items={items} label="Conversations" activeKey={view === 'chat' ? activeId : null} render={(item) => {
+    if (item.kind === 'heading') return <h3 className="flex h-8 items-center px-2.5 text-[0.65rem] font-semibold uppercase tracking-wide text-ink-400">{item.label}</h3>
+    const conversation = item.conversation
+    const mining = threadMining(conversation)
+    return <ThreadRow conversation={conversation} kind="chat" active={view === 'chat' && conversation.id === activeId} running={runningOf(conversation.id, agentRun, streamingId)} pending={mining.pending} committed={mining.committed} />
+  }} />
 }
 
 /** A clock that moves once a minute — enough for "5m" to become "6m" without a timer per row. */
@@ -305,6 +238,7 @@ function useMinuteClock(): number {
 }
 
 /** Code's side: every folder with a session, and the folders opened recently, sessions beneath. */
+type ProjectNavItem = SidebarItem & ({ kind: 'project'; project: Project; folded: boolean; busy: boolean } | { kind: 'session'; conversation: Conversation })
 function ProjectList() {
   const conversations = useStudio((s) => s.conversations)
   const activeId = useStudio((s) => s.activeConversationId)
@@ -315,55 +249,22 @@ function ProjectList() {
   const collapsed = useUi((s) => s.collapsedProjects)
   const now = useMinuteClock()
   const projects = useMemo(() => groupProjects(threadsOf(conversations, 'code'), recent), [conversations, recent])
-
-  if (projects.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 text-[0.8rem] leading-relaxed text-ink-500 dark:text-ink-400">
-        <p>No projects yet. Open a folder and the agent works in it — reading, editing and running commands, with your approval.</p>
-        <button type="button" className="btn-outline mt-3 px-2.5 py-1 text-xs" onClick={openFolder}>
-          <Icon name="folderOpen" className="size-3.5" />
-          Open folder…
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" onKeyDown={onListKeyDown}>
-      {projects.map((project) => {
-        const folded = collapsed.includes(project.key)
-        // A folded project still shows the session in view: the thread on screen is never one the
-        // sidebar has hidden.
-        const shown = folded ? project.sessions.filter((s) => view === 'chat' && s.id === activeId) : project.sessions
-        const busy = project.sessions.some((s) => s.id === agentRun?.conversationId || s.id === streamingId)
-        return (
-          <section key={project.key || '(no folder)'} data-project-group aria-label={project.name} className="pt-2 first:pt-1">
-            <ProjectHeader project={project} collapsed={folded} busy={busy} />
-            {shown.length > 0 && (
-              <ul className="space-y-px">
-                {shown.map((session) => {
-                  const mining = threadMining(session)
-                  return (
-                    <ThreadRow
-                      key={session.id}
-                      conversation={session}
-                      kind="session"
-                      active={view === 'chat' && session.id === activeId}
-                      running={runningOf(session.id, agentRun, streamingId)}
-                      pending={mining.pending}
-                      committed={mining.committed}
-                      age={shortAge(session.updatedAt, now)}
-                      changes={session.changes?.length ?? 0}
-                    />
-                  )
-                })}
-              </ul>
-            )}
-          </section>
-        )
-      })}
-    </div>
-  )
+  const items = useMemo(() => projects.flatMap<ProjectNavItem>((project) => {
+    const folded = collapsed.includes(project.key)
+    const shown = folded ? project.sessions.filter((s) => view === 'chat' && s.id === activeId) : project.sessions
+    const key = `project:${project.key}`
+    return [
+      { key, kind: 'project', project, folded, busy: project.sessions.some((s) => s.id === agentRun?.conversationId || s.id === streamingId), selectable: true },
+      ...shown.map((conversation): ProjectNavItem => ({ key: conversation.id, kind: 'session', conversation, parent: key, selectable: true })),
+    ]
+  }), [projects, collapsed, view, activeId, agentRun?.conversationId, streamingId])
+  if (!items.length) return <div className="flex-1 px-4 py-4 text-xs text-ink-500"><p>No projects yet. Open a folder to start an agent session.</p><button type="button" className="btn-outline mt-3 px-2.5 py-1 text-xs" onClick={openFolder}><Icon name="folderOpen" className="size-3.5" />Open folder…</button></div>
+  return <VirtualSidebar items={items} label="Projects" activeKey={view === 'chat' ? activeId : null} render={(item) => {
+    if (item.kind === 'project') return <ProjectHeader project={item.project} collapsed={item.folded} busy={item.busy} />
+    const session = item.conversation
+    const mining = threadMining(session)
+    return <ThreadRow conversation={session} kind="session" active={view === 'chat' && session.id === activeId} running={runningOf(session.id, agentRun, streamingId)} pending={mining.pending} committed={mining.committed} age={shortAge(session.updatedAt, now)} changes={session.changes?.length ?? 0} />
+  }} />
 }
 
 /** A project's name row: folds its sessions; on hover, a new session there and the folder's menu. */
@@ -403,10 +304,9 @@ function ProjectHeader({ project, collapsed, busy }: { project: Project; collaps
           if (event.key === 'ArrowLeft' && !collapsed) {
             event.preventDefault()
             toggle()
-          } else if (event.key === 'ArrowRight') {
+          } else if (event.key === 'ArrowRight' && collapsed) {
             event.preventDefault()
-            if (collapsed) toggle()
-            else event.currentTarget.closest('[data-project-group]')?.querySelector<HTMLElement>('[data-thread-row]')?.focus()
+            toggle()
           }
         }}
         className={`peer flex h-8 w-full items-center gap-2 rounded-lg pl-2.5 pr-2 text-left text-[0.8rem] font-medium transition-colors hover:bg-ink-100 focus-visible:bg-ink-100 focus-visible:outline-none dark:hover:bg-ink-800 dark:focus-visible:bg-ink-800 ${
@@ -576,7 +476,7 @@ const ThreadRow = memo(function ThreadRow({ conversation, kind, active, running,
   }
 
   return (
-    <li className="group relative">
+    <div className="group relative">
       {renaming ? (
         <RenameField initial={title} label={session ? 'Session name' : 'Thread name'} onDone={finishRename} />
       ) : (
@@ -732,7 +632,7 @@ const ThreadRow = memo(function ThreadRow({ conversation, kind, active, running,
           <MenuItem icon="trash" label="Delete" danger onSelect={() => setConfirmDelete(true)} />
         )}
       </Popover>
-    </li>
+    </div>
   )
 }, sameRow)
 
@@ -772,37 +672,6 @@ function RenameField({ initial, label, onDone }: { initial: string; label: strin
 // --- the rest of the window ----------------------------------------------------------------------
 
 /** Models, Image, Network, Monitor — two by two, so the threads above keep the height. */
-function NavGrid() {
-  const view = useStudio((s) => s.view)
-  const downloads = useActiveDownloads()
-  return (
-    <nav className="grid grid-cols-2 gap-px px-2 pt-1.5" aria-label="Views">
-      {NAV.map((item) => (
-        <button
-          key={item}
-          type="button"
-          onClick={() => goTo(item)}
-          aria-current={view === item ? 'page' : undefined}
-          title={`${VIEW_LABELS[item]} — ${NAV_NOTES[item] ?? ''} (${formatShortcut(VIEW_SHORTCUTS[item])})`}
-          className={`flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-[0.75rem] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-500/40 ${
-            view === item
-              ? 'bg-arc-500/10 font-medium text-arc-700 dark:bg-arc-400/10 dark:text-arc-300'
-              : 'text-ink-600 hover:bg-ink-100 hover:text-ink-900 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-50'
-          }`}
-        >
-          <Icon name={VIEW_ICONS[item]} className="size-3.5 shrink-0 opacity-80" />
-          <span className="min-w-0 flex-1 truncate text-left">{VIEW_LABELS[item]}</span>
-          {item === 'models' && downloads > 0 && (
-            <span className="badge bg-arc-600 px-1 py-0 text-[0.6rem] text-white" title={`${downloads} download${downloads === 1 ? '' : 's'} in progress`}>
-              {downloads}
-            </span>
-          )}
-        </button>
-      ))}
-    </nav>
-  )
-}
-
 function ConnectionStatus({ compact = false }: { compact?: boolean }) {
   const connected = useStudio((s) => s.connected)
   const modelId = useStudio((s) => s.runtime?.model_id ?? null)
@@ -837,21 +706,9 @@ function ThemeButton() {
   )
 }
 
-function SidebarFooter() {
-  const view = useStudio((s) => s.view)
-  return (
-    <div className="flex h-10 items-center gap-0.5 px-2">
-      <ConnectionStatus />
-      <ThemeButton />
-      <IconButton icon="settings" label="Settings" shortcut={SHORTCUTS.settings} active={view === 'settings'} onClick={() => goTo('settings')} />
-    </div>
-  )
-}
-
-/** The collapsed sidebar: every way back in, as icons. */
 function SidebarRail() {
   const toggleSidebar = useUi((s) => s.toggleSidebar)
-  const openPalette = useUi((s) => s.openPalette)
+  const sidebarOpen = useUi((s) => s.sidebarOpen)
   const side = useUi((s) => s.appMode)
   const view = useStudio((s) => s.view)
   const downloads = useActiveDownloads()
@@ -859,24 +716,25 @@ function SidebarRail() {
   const project = useNewSessionProject()
 
   return (
-    <aside className="flex h-full w-12 shrink-0 flex-col items-center gap-0.5 border-r border-ink-200 bg-white py-2 dark:border-ink-800 dark:bg-ink-900" aria-label="Sidebar">
-      <IconButton icon="panelLeft" label="Expand sidebar" shortcut={SHORTCUTS.toggleSidebar} onClick={toggleSidebar} />
+    <aside className="flex h-full w-12 shrink-0 flex-col items-center gap-0.5 border-r border-ink-200 bg-white py-2 dark:border-ink-800 dark:bg-ink-900" aria-label="Activity bar">
+      <img src={logo} alt="LLM Studio" className="mb-2 mt-1 h-5 w-auto" />
+      <IconButton icon="panelLeft" label={sidebarOpen ? "Hide sidebar" : "Expand sidebar"} shortcut={SHORTCUTS.toggleSidebar} onClick={toggleSidebar} />
       <div className="my-1.5 h-px w-6 bg-ink-200 dark:bg-ink-800" />
-      <div className="flex flex-col gap-0.5 rounded-lg bg-ink-100 p-0.5 dark:bg-ink-800" role="group" aria-label="Chat or Code">
+      <div className="flex w-full flex-col gap-1" role="group" aria-label="Chat or Code">
         {SIDES.map((mode) => {
           const on = side === mode
           return (
-            <span key={mode} className="relative flex">
+            <span key={mode} className="relative flex w-full justify-center">
               <button
                 type="button"
                 aria-pressed={on}
                 aria-label={SIDE_LABELS[mode]}
                 title={sideTitle(mode, on ? null : activity[mode])}
-                onClick={() => switchAppMode(mode)}
-                className={`inline-flex size-7 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-500/40 ${
+                onClick={() => { switchAppMode(mode); useUi.getState().setSidebarOpen(true) }}
+                className={`inline-flex h-10 w-full items-center justify-center border-l-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-arc-500/40 ${
                   on
-                    ? 'bg-white text-ink-900 shadow-sm shadow-ink-950/5 dark:bg-ink-950 dark:text-ink-50'
-                    : 'text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100'
+                    ? 'border-arc-500 bg-ink-100 text-ink-900 dark:bg-ink-800 dark:text-ink-50'
+                    : 'border-transparent text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100'
                 }`}
               >
                 <Icon name={SIDE_ICONS[mode]} className="size-4" />
@@ -895,7 +753,7 @@ function SidebarRail() {
           <IconButton icon="folderOpen" label="Open folder…" onClick={openFolder} />
         </>
       )}
-      <IconButton icon="search" label="Search" shortcut={SHORTCUTS.palette} onClick={() => openPalette()} />
+      <IconButton icon="search" label="Search" shortcut={SHORTCUTS.quickOpen} onClick={() => useUi.getState().setQuickOpen(true)} />
       <div className="my-1.5 h-px w-6 bg-ink-200 dark:bg-ink-800" />
       <nav className="flex flex-col items-center gap-0.5" aria-label="Views">
         {NAV.map((item) => (

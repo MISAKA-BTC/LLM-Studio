@@ -42,6 +42,7 @@ function isFolderEntry(file: GitFile): boolean {
 
 function FileDiff({ root, file }: { root: string; file: GitFile }) {
   const [state, setState] = useState<DiffState>(file.binary ? { kind: 'binary' } : { kind: 'loading' })
+  const shownFile = useRef<string | null>(null)
   // The diff is read again when git's numbers for the file change — not on every status refresh.
   const signature = `${file.status}|${file.index}${file.worktree}|${file.added}|${file.removed}`
 
@@ -51,14 +52,18 @@ function FileDiff({ root, file }: { root: string; file: GitFile }) {
       return
     }
     if (isFolderEntry(file)) return
+    const controller = new AbortController()
     let live = true
-    setState((s) => (s.kind === 'patch' || s.kind === 'content' ? s : { kind: 'loading' }))
+    const key = JSON.stringify([root, file.path])
+    const sameFile = shownFile.current === key
+    shownFile.current = key
+    setState((s) => (sameFile && (s.kind === 'patch' || s.kind === 'content') ? s : { kind: 'loading' }))
     void (async () => {
       try {
-        const diff = await api.workspace.gitDiff(root, file.path)
+        const diff = await api.workspace.gitDiff(root, file.path, controller.signal)
         if (!diff.patch.trim() && file.status === 'untracked') {
           // `git diff` says nothing about a file it does not track; the file itself is the change.
-          const read = await api.workspace.read(root, file.path, { max_bytes: UNTRACKED_READ_BYTES })
+          const read = await api.workspace.read(root, file.path, { max_bytes: UNTRACKED_READ_BYTES }, controller.signal)
           if (!live) return
           setState(read.binary ? { kind: 'binary' } : { kind: 'content', content: read.content, truncated: read.truncated, size: read.size })
           return
@@ -70,6 +75,7 @@ function FileDiff({ root, file }: { root: string; file: GitFile }) {
     })()
     return () => {
       live = false
+      controller.abort()
     }
   }, [root, file.path, file.binary, file.status, signature])
 
@@ -115,8 +121,9 @@ function FileDiff({ root, file }: { root: string; file: GitFile }) {
 }
 
 /** The size of a file's change: its line counts, or why there are none. */
-function ChangeSize({ file }: { file: GitFile }) {
+function ChangeSize({ file, counted }: { file: GitFile; counted: boolean }) {
   const quiet = 'shrink-0 text-[0.65rem] text-ink-400 dark:text-ink-500'
+  if (!counted) return <span className={quiet} title="Line counts are being read">…</span>
   if (file.binary) return <span className="badge shrink-0 bg-ink-100 text-ink-500 dark:bg-ink-800 dark:text-ink-400">binary</span>
   if (isFolderEntry(file)) return <span className={quiet}>repository</span>
   // Git leaves very large untracked files uncounted — a count of nothing is not "no change".
@@ -124,7 +131,7 @@ function ChangeSize({ file }: { file: GitFile }) {
   return <DiffStat added={file.added ?? 0} removed={file.removed ?? 0} />
 }
 
-function FileRow({ root, file, open, onToggle }: { root: string; file: GitFile; open: boolean; onToggle: () => void }) {
+function FileRow({ root, file, counted, open, onToggle }: { root: string; file: GitFile; counted: boolean; open: boolean; onToggle: () => void }) {
   const meta = GIT_STATUS[file.status]
   const folder = isFolderEntry(file)
   const { dir, name } = splitPath(folder ? file.path.slice(0, -1) : file.path)
@@ -150,7 +157,7 @@ function FileRow({ root, file, open, onToggle }: { root: string; file: GitFile; 
           <span className="font-medium text-ink-800 dark:text-ink-100">{name}</span>
           {folder && <span className="text-ink-400 dark:text-ink-500">/</span>}
         </span>
-        <ChangeSize file={file} />
+        <ChangeSize file={file} counted={counted} />
       </button>
       {open && <FileDiff root={root} file={file} />}
     </div>
@@ -158,7 +165,7 @@ function FileRow({ root, file, open, onToggle }: { root: string; file: GitFile; 
 }
 
 function WorkingTree({ root }: { root: string }) {
-  const git = useGitStatus(root)
+  const git = useGitStatus(root, true)
   const status = git?.status ?? null
   const [open, setOpen] = useState<Set<string>>(() => openRows.get(root) ?? new Set())
   const [showAll, setShowAll] = useState(false)
@@ -223,11 +230,11 @@ function WorkingTree({ root }: { root: string }) {
           <span>
             {status.files.length} file{status.files.length === 1 ? '' : 's'} changed
           </span>
-          <DiffStat added={status.added} removed={status.removed} />
+          {status.counts_included !== false ? <DiffStat added={status.added} removed={status.removed} /> : <span>Reading line counts…</span>}
         </div>
         <div className="overflow-hidden rounded-xl border border-ink-200 dark:border-ink-800">
           {rows.map((file) => (
-            <FileRow key={file.path} root={root} file={file} open={open.has(file.path)} onToggle={() => toggle(file.path)} />
+            <FileRow key={file.path} root={root} file={file} counted={status.counts_included !== false} open={open.has(file.path)} onToggle={() => toggle(file.path)} />
           ))}
           {rows.length < status.files.length && (
             <button type="button" className="w-full px-3 py-2 text-left text-[0.7rem] text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-200" onClick={() => setShowAll(true)}>

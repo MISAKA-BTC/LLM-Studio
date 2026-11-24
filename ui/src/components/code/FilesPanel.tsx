@@ -20,10 +20,11 @@ import { useUi } from '../../store/ui'
 import { draftKey, useComposer } from '../chat/composerStore'
 import { Icon, Spinner } from '../common'
 import { EMPTY_TREE, loadDir, refreshTree, rememberScroll, selectFile, setFilesQuery, toggleDir, useFileTree, useFiles, type FileTree } from './filesStore'
+import { fileCache, VIEW_MAX_BYTES } from './fileCache'
+import { cachedHighlight, highlightFile } from './highlight'
 import { NoFolder, copyText, splitPath } from './shared'
+import { TREE_ROW_HEIGHT, treeWindow } from './treeWindow'
 
-/** The most of a file the viewer reads. */
-const VIEW_MAX_BYTES = 512 * 1024
 /** Past this many characters a file is shown without highlighting — highlighting is the slow part. */
 const HIGHLIGHT_LIMIT = 200_000
 /** Lines drawn before "Show all". */
@@ -51,15 +52,6 @@ async function mentionInComposer(root: string, path: string, conversationId: str
 
 // --- highlighting -----------------------------------------------------------------------------------
 
-type Highlighter = { highlight: (code: string, options: { language: string; ignoreIllegals?: boolean }) => { value: string }; getLanguage: (name: string) => unknown }
-let highlighter: Promise<Highlighter> | null = null
-
-/** highlight.js's common grammars, loaded the first time a file is viewed — not with the window. */
-function loadHighlighter(): Promise<Highlighter> {
-  highlighter ??= import('highlight.js/lib/common').then((module) => module.default as unknown as Highlighter)
-  return highlighter
-}
-
 // The window's stylesheet colours tokens for a dark code block. The viewer follows the theme, so in
 // the light one it needs light-theme colours (GitHub's) — scoped to it, so chat code blocks keep theirs.
 const LIGHT_TOKENS = `
@@ -86,23 +78,21 @@ function CodeView({ content, language, startLine }: { content: string; language:
     if (all.length > 1 && all[all.length - 1] === '') all.pop()
     return all
   }, [content])
-  const shown = showAll ? lines : lines.slice(0, RENDER_LINES)
+  const shown = useMemo(() => showAll ? lines : lines.slice(0, RENDER_LINES), [showAll, lines])
   const text = useMemo(() => shown.join('\n'), [shown])
   const numbers = useMemo(() => Array.from({ length: shown.length }, (_, i) => i + startLine).join('\n'), [shown.length, startLine])
-  const [html, setHtml] = useState<string | null>(null)
+  const [highlighted, setHighlighted] = useState<{ text: string; language: string; html: string | null } | null>(null)
+  const mayHighlight = language !== null && text.length <= HIGHLIGHT_LIMIT
+  const html = mayHighlight
+    ? (highlighted?.text === text && highlighted.language === language ? highlighted.html : cachedHighlight(text, language) ?? null)
+    : null
 
   useEffect(() => {
-    setHtml(null)
     if (!language || text.length > HIGHLIGHT_LIMIT) return
     let live = true
-    void loadHighlighter()
-      .then((hljs) => {
-        if (!live || !hljs.getLanguage(language)) return
-        setHtml(hljs.highlight(text, { language, ignoreIllegals: true }).value)
-      })
-      .catch(() => {
-        /* plain text, then */
-      })
+    void highlightFile(text, language).then((html) => {
+      if (live) setHighlighted({ text, language, html })
+    })
     return () => {
       live = false
     }
@@ -136,52 +126,74 @@ function CodeView({ content, language, startLine }: { content: string; language:
 
 // --- the viewer -------------------------------------------------------------------------------------
 
-/** Files read recently, so going back and forth between two is instant. */
-const viewed = new Map<string, WorkspaceFile>()
-const VIEWED_KEEP = 12
-
-function remember(key: string, file: WorkspaceFile) {
-  viewed.delete(key)
-  viewed.set(key, file)
-  while (viewed.size > VIEWED_KEEP) viewed.delete(viewed.keys().next().value!)
-}
-
 function FileViewer({ root, path, conversationId }: { root: string; path: string; conversationId: string }) {
-  const key = `${root}\n${path}`
-  const [file, setFile] = useState<WorkspaceFile | null>(() => viewed.get(key) ?? null)
+  const [file, setFile] = useState<WorkspaceFile | null>(() => fileCache.peek(root, path)?.file ?? null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0)
+  const lastRead = useRef(0)
   const backRef = useRef<HTMLButtonElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const toast = useStudio((s) => s.toast)
 
   useEffect(() => {
-    const cached = nonce === 0 ? viewed.get(key) : undefined
-    if (cached) {
-      setFile(cached)
-      setError(null)
-      return
-    }
+    // Activity reactivates effects when the tab returns. A previous manual refresh must not
+    // turn every later activation into another read.
+    const force = nonce !== lastRead.current
+    lastRead.current = nonce
     let live = true
-    setLoading(true)
+    let retry: ReturnType<typeof setTimeout> | null = null
+    let attempts = 0
+    const cached = fileCache.peek(root, path)
+    setLoading(force || !cached || !!cached.stale)
     setError(null)
-    api.workspace
-      .read(root, path, { max_bytes: VIEW_MAX_BYTES })
-      .then((read) => {
-        if (!live) return
-        remember(key, read)
-        setFile(read)
-      })
-      .catch((e: unknown) => {
-        if (live) setError((e as Error).message)
-      })
-      .finally(() => {
-        if (live) setLoading(false)
-      })
+    const load = (refresh = false) => {
+      void fileCache.read(root, path, refresh).then(
+        (read) => {
+          if (!live) return
+          setFile(read)
+          setLoading(false)
+        },
+        (error: unknown) => {
+          if (!live) return
+          if ((error as Error)?.name === 'AbortError') {
+            // An invalidation may cancel the file that is still on screen. Follow its latest
+            // request/cache without showing a failure or repeatedly forcing other consumers to
+            // cancel. Back off through bursts; only one retry is scheduled, and hidden effects
+            // cancel it instead of restarting background work.
+            setLoading(true)
+            const delay = Math.min(400, 25 * 2 ** Math.min(attempts++, 4))
+            retry = setTimeout(() => {
+              retry = null
+              if (live) load()
+            }, delay)
+            return
+          }
+          setError((error as Error)?.message ?? String(error))
+          setLoading(false)
+        },
+      )
+    }
+    load(force)
     return () => {
       live = false
+      if (retry !== null) clearTimeout(retry)
     }
-  }, [key, root, path, nonce])
+  }, [root, path, nonce])
+
+  const hasFile = file !== null
+  useLayoutEffect(() => {
+    if (!hasFile) return
+    const element = scrollRef.current
+    const position = fileCache.peek(root, path)?.position
+    if (element && position) {
+      element.scrollTop = position.top
+      element.scrollLeft = position.left
+    }
+    return () => {
+      if (element) fileCache.rememberPosition(root, path, { top: element.scrollTop, left: element.scrollLeft })
+    }
+  }, [root, path, hasFile])
 
   // Opened from the tree or the filter, the keyboard follows into the viewer — but a viewer that
   // appears because another session in the folder was opened leaves the focus where it is.
@@ -234,7 +246,7 @@ function FileViewer({ root, path, conversationId }: { root: string; path: string
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-white dark:bg-ink-900" tabIndex={0} aria-label={`Contents of ${path}`}>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-white dark:bg-ink-900" tabIndex={0} aria-label={`Contents of ${path}`}>
         {error ? (
           <p className="p-3 text-xs text-red-600 dark:text-red-400">{error}</p>
         ) : !file ? (
@@ -263,7 +275,7 @@ function FileViewer({ root, path, conversationId }: { root: string; path: string
 // --- the tree ---------------------------------------------------------------------------------------
 
 type Row =
-  | { kind: 'entry'; entry: WorkspaceEntry; depth: number; open: boolean }
+  | { kind: 'entry'; entry: WorkspaceEntry; depth: number; open: boolean; position: number; siblings: number }
   | { kind: 'note'; key: string; depth: number; text: string; tone: 'quiet' | 'error' }
 
 function rowsOf(tree: FileTree): Row[] {
@@ -282,9 +294,9 @@ function rowsOf(tree: FileTree): Row[] {
     // Folders first, as the runtime lists them — sorted again here so that holds whatever it sends.
     const entries = [...dir.entries].sort((a, b) => Number(b.is_dir) - Number(a.is_dir))
     if (entries.length === 0 && path !== '.') rows.push({ kind: 'note', key: `${path}:empty`, depth, text: 'Empty', tone: 'quiet' })
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
       const open = entry.is_dir && expanded.has(entry.path)
-      rows.push({ kind: 'entry', entry, depth, open })
+      rows.push({ kind: 'entry', entry, depth, open, position: index + 1, siblings: entries.length })
       if (open) walk(entry.path, depth + 1)
     }
     if (dir.truncated) rows.push({ kind: 'note', key: `${path}:more`, depth, text: 'More entries than are listed here — use the filter to find one.', tone: 'quiet' })
@@ -299,11 +311,15 @@ function parentOf(path: string): string | null {
 }
 
 function TreeView({ root, tree }: { root: string; tree: FileTree }) {
-  const rows = useMemo(() => rowsOf(tree), [tree])
-  const entries = rows.filter((r): r is Extract<Row, { kind: 'entry' }> => r.kind === 'entry')
+  const rows = useMemo(() => rowsOf(tree), [tree.dirs, tree.expanded])
+  const entries = useMemo(() => rows.filter((r): r is Extract<Row, { kind: 'entry' }> => r.kind === 'entry'), [rows])
   const [active, setActive] = useState<string | null>(tree.lastViewed)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const pendingFocus = useRef<string | null>(null)
+  const [viewport, setViewport] = useState({ top: tree.scrollTop, height: 420 })
   const top = tree.dirs['.']
+  const ready = top?.status === 'ok' && entries.length > 0
+  const windowed = treeWindow(rows.length, viewport.top, viewport.height)
 
   useEffect(() => {
     void loadDir(root, '.')
@@ -312,22 +328,46 @@ function TreeView({ root, tree }: { root: string; tree: FileTree }) {
   // Back from the viewer: where the tree was, with the file just viewed in focus for the keyboard.
   // Only on mount (and for another folder): from then on the scroll position is the person's.
   useLayoutEffect(() => {
+    if (!ready) return
     const element = scrollRef.current
     const { scrollTop, lastViewed } = useFiles.getState().byRoot[root] ?? EMPTY_TREE
-    if (element) element.scrollTop = scrollTop
-    if (document.activeElement === document.body && lastViewed) {
-      element?.querySelector<HTMLElement>(`[data-tree-row="${CSS.escape(lastViewed)}"]`)?.focus({ preventScroll: true })
+    if (!element) return
+    element.scrollTop = scrollTop
+    const measure = () => setViewport({ top: element.scrollTop, height: element.clientHeight || 420 })
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    const range = treeWindow(rows.length, scrollTop, element.clientHeight || 420)
+    if (document.activeElement === document.body && lastViewed && rows.slice(range.start, range.end).some((row) => row.kind === 'entry' && row.entry.path === lastViewed)) {
+      pendingFocus.current = lastViewed
     }
     return () => {
-      if (element) rememberScroll(root, element.scrollTop)
+      observer.disconnect()
+      rememberScroll(root, element.scrollTop)
     }
-  }, [root])
+  }, [root, ready])
+
+  useLayoutEffect(() => {
+    if (!pendingFocus.current) return
+    const target = scrollRef.current?.querySelector<HTMLElement>(`[data-tree-row="${CSS.escape(pendingFocus.current)}"]`)
+    if (target) {
+      target.focus({ preventScroll: true })
+      pendingFocus.current = null
+    }
+  })
 
   const activate = (entry: WorkspaceEntry) => (entry.is_dir ? toggleDir(root, entry.path) : selectFile(root, entry.path))
   const focusRow = (path: string | undefined) => {
     if (!path) return
     setActive(path)
-    scrollRef.current?.querySelector<HTMLElement>(`[data-tree-row="${CSS.escape(path)}"]`)?.focus()
+    const element = scrollRef.current
+    const index = rows.findIndex((row) => row.kind === 'entry' && row.entry.path === path)
+    if (!element || index < 0) return
+    const y = index * TREE_ROW_HEIGHT
+    if (y < element.scrollTop) element.scrollTop = y
+    else if (y + TREE_ROW_HEIGHT > element.scrollTop + element.clientHeight) element.scrollTop = y + TREE_ROW_HEIGHT - element.clientHeight
+    pendingFocus.current = path
+    setViewport({ top: element.scrollTop, height: element.clientHeight || 420 })
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -391,17 +431,24 @@ function TreeView({ root, tree }: { root: string; tree: FileTree }) {
   }
   if (entries.length === 0) return <p className="p-3 text-xs text-ink-500 dark:text-ink-400">This folder is empty.</p>
 
-  const tabStop = active && entries.some((r) => r.entry.path === active) ? active : entries[0]?.entry.path
+  const visibleRows = rows.slice(windowed.start, windowed.end)
+  const visibleEntries = visibleRows.filter((r): r is Extract<Row, { kind: 'entry' }> => r.kind === 'entry')
+  const tabStop = active && visibleEntries.some((r) => r.entry.path === active) ? active : visibleEntries[0]?.entry.path
 
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1" role="tree" aria-label={`Files in ${folderName(root)}`} onKeyDown={onKeyDown}>
-      {rows.map((row) => {
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1" role="tree" aria-label={`Files in ${folderName(root)}`} onKeyDown={onKeyDown}
+      onScroll={(event) => {
+        const element = event.currentTarget
+        setViewport({ top: element.scrollTop, height: element.clientHeight || 420 })
+      }}>
+      <div role="presentation" style={{ height: windowed.start * TREE_ROW_HEIGHT }} />
+      {visibleRows.map((row) => {
         if (row.kind === 'note') {
           return (
             <div
               key={row.key}
-              className={`truncate py-1 pr-2 text-[0.7rem] ${row.tone === 'error' ? 'text-red-600 dark:text-red-400' : 'text-ink-400 dark:text-ink-500'}`}
-              style={{ paddingLeft: 30 + row.depth * 14 }}
+              className={`flex h-7 items-center truncate pr-2 text-[0.7rem] ${row.tone === 'error' ? 'text-red-600 dark:text-red-400' : 'text-ink-400 dark:text-ink-500'}`}
+              style={{ paddingLeft: 30 + row.depth * 14, height: TREE_ROW_HEIGHT }}
             >
               {row.text}
             </div>
@@ -415,6 +462,8 @@ function TreeView({ root, tree }: { root: string; tree: FileTree }) {
             key={entry.path}
             role="treeitem"
             aria-level={depth + 1}
+            aria-posinset={row.position}
+            aria-setsize={row.siblings}
             aria-expanded={entry.is_dir ? open : undefined}
             aria-selected={marked}
             data-tree-row={entry.path}
@@ -428,7 +477,7 @@ function TreeView({ root, tree }: { root: string; tree: FileTree }) {
             className={`group flex h-7 cursor-default items-center gap-1.5 rounded-md pr-2 text-[0.8rem] outline-none hover:bg-ink-100 focus-visible:ring-2 focus-visible:ring-arc-500/40 dark:hover:bg-ink-800 ${
               marked ? 'bg-ink-100 text-ink-900 dark:bg-ink-800 dark:text-ink-50' : 'text-ink-700 dark:text-ink-200'
             }`}
-            style={{ paddingLeft: 6 + depth * 14 }}
+            style={{ paddingLeft: 6 + depth * 14, height: TREE_ROW_HEIGHT }}
           >
             {entry.is_dir ? (
               <Icon name="chevron" className={`size-3 shrink-0 text-ink-400 transition-transform ${open ? 'rotate-90' : ''}`} />
@@ -448,6 +497,7 @@ function TreeView({ root, tree }: { root: string; tree: FileTree }) {
           </div>
         )
       })}
+      <div role="presentation" style={{ height: (rows.length - windowed.end) * TREE_ROW_HEIGHT }} />
     </div>
   )
 }
@@ -538,7 +588,7 @@ function Files({ root, conversationId }: { root: string; conversationId: string 
     // Only when the viewer closes — not while the filter is typed into, hence not on `query`.
   }, [tree.selected])
 
-  if (tree.selected) return <FileViewer key={tree.selected} root={root} path={tree.selected} conversationId={conversationId} />
+  if (tree.selected) return <FileViewer key={JSON.stringify([root, tree.selected])} root={root} path={tree.selected} conversationId={conversationId} />
 
   const refresh = async () => {
     setRefreshing(true)
@@ -586,5 +636,5 @@ function Files({ root, conversationId }: { root: string; conversationId: string 
 export function FilesPanel({ conversation }: { conversation: Conversation | null }) {
   const root = conversation?.workspace ?? null
   if (!conversation || !root) return <NoFolder conversation={conversation} what="its files" />
-  return <Files root={root} conversationId={conversation.id} />
+  return <Files key={root} root={root} conversationId={conversation.id} />
 }

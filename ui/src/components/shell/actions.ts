@@ -21,6 +21,7 @@ export type Theme = Settings['ui']['theme']
 function closeChromeLayers() {
   const ui = useUi.getState()
   if (ui.paletteOpen) ui.setPaletteOpen(false)
+  if (ui.quickOpen) ui.setQuickOpen(false)
   if (ui.shortcutsOpen) ui.setShortcutsOpen(false)
 }
 

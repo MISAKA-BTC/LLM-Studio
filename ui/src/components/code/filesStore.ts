@@ -8,6 +8,7 @@
 import { create } from 'zustand'
 import { api } from '../../lib/api'
 import type { WorkspaceEntry } from '../../lib/types'
+import { fileCache } from './fileCache'
 
 export type DirState = {
   status: 'loading' | 'ok' | 'error'
@@ -34,6 +35,7 @@ export const useFiles = create<{ byRoot: Record<string, FileTree> }>(() => ({ by
 
 /** Entries read per directory — the runtime's own ceiling for one listing. */
 const DIR_LIMIT = 5000
+const directoryReads = new Map<string, Promise<void>>()
 
 function update(root: string, fn: (tree: FileTree) => Partial<FileTree>) {
   useFiles.setState((s) => {
@@ -49,16 +51,22 @@ function setDir(root: string, path: string, dir: DirState) {
 /** Read one directory's entries (`.` is the folder itself). Kept while it is shown again; `force`
  *  reads it anew. */
 export async function loadDir(root: string, path = '.', force = false): Promise<void> {
+  const key = JSON.stringify([root, path])
+  const pending = directoryReads.get(key)
+  if (!force && pending) return pending
   const current = useFiles.getState().byRoot[root]?.dirs[path]
   if (!force && current && current.status !== 'error') return
   // A directory already on screen stays there while it is read again, rather than blinking empty.
   setDir(root, path, current?.status === 'ok' ? current : { status: 'loading', entries: [], truncated: false, error: null })
-  try {
-    const tree = await api.workspace.tree(root, path, 1, DIR_LIMIT)
-    setDir(root, path, { status: 'ok', entries: tree.entries, truncated: tree.truncated, error: null })
-  } catch (error) {
-    setDir(root, path, { status: 'error', entries: [], truncated: false, error: (error as Error).message })
-  }
+  const request = api.workspace.tree(root, path, 1, DIR_LIMIT).then((tree) => {
+    if (directoryReads.get(key) === request) setDir(root, path, { status: 'ok', entries: tree.entries, truncated: tree.truncated, error: null })
+  }).catch((error: unknown) => {
+    if (directoryReads.get(key) === request) setDir(root, path, { status: 'error', entries: [], truncated: false, error: (error as Error).message })
+  }).finally(() => {
+    if (directoryReads.get(key) === request) directoryReads.delete(key)
+  })
+  directoryReads.set(key, request)
+  return request
 }
 
 export function toggleDir(root: string, path: string, open?: boolean): void {
@@ -87,6 +95,7 @@ export function rememberScroll(root: string, scrollTop: number): void {
 
 /** Read the folder again: the top level and every directory that is open. */
 export async function refreshTree(root: string): Promise<void> {
+  fileCache.invalidate(root)
   const tree = useFiles.getState().byRoot[root] ?? EMPTY_TREE
   await Promise.all(['.', ...tree.expanded].map((path) => loadDir(root, path, true)))
 }

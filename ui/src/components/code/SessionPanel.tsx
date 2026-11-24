@@ -388,7 +388,7 @@ function ChangesCard({ conversation }: { conversation: Conversation }) {
         <span className="truncate">
           {status.files.length} file{status.files.length === 1 ? '' : 's'} changed
         </span>
-        <DiffStat added={status.added} removed={status.removed} />
+        {status.counts_included !== false && <DiffStat added={status.added} removed={status.removed} />}
       </span>
     )
 
@@ -396,7 +396,7 @@ function ChangesCard({ conversation }: { conversation: Conversation }) {
     <Card
       id="changes"
       title="Changes"
-      aside={status && status.files.length > 0 ? <DiffStat added={status.added} removed={status.removed} /> : agent.count > 0 ? <DiffStat added={agent.added} removed={agent.removed} /> : null}
+      aside={status && status.files.length > 0 ? status.counts_included !== false && <DiffStat added={status.added} removed={status.removed} /> : agent.count > 0 ? <DiffStat added={agent.added} removed={agent.removed} /> : null}
     >
       <Row icon="diff" action={status && status.files.length > 0 ? <SmallButton onClick={review}>Review</SmallButton> : null}>
         {tree}

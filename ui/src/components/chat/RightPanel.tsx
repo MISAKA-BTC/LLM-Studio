@@ -11,7 +11,7 @@
 // There is one `rightPanel` setting for the window; a tab one side does not have is shown as its
 // nearest neighbour on the other (`effectivePanel`), so switching sides never leaves a blank panel.
 
-import { memo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { memo, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { api } from '../../lib/api'
 import { contentForModel, historyForModel } from '../../lib/history'
 import type { ContextReport, Conversation } from '../../lib/types'
@@ -30,6 +30,7 @@ import { ContextReportView, PinnedNotesEditor } from '../ContextPanel'
 import { IconButton } from '../ui'
 import { draftKey, useDraft } from './composerStore'
 import { MiningPanel } from './MiningPanel'
+import { RetainedView } from '../shell/RetainedView'
 
 const CODE_TABS: Panel[] = ['session', 'changes', 'terminal', 'files', 'mining']
 
@@ -45,19 +46,45 @@ export const RightPanel = memo(function RightPanel({ conversation }: { conversat
     lastPanel.current = panel
     noteTabShown(tab)
   }
-  if (!tab) return null
-  return side === 'code' ? <CodePanel conversation={conversation} tab={tab} /> : <ChatPanel conversation={conversation} tab={tab} />
+  return (
+    <>
+      <SidePanel side="code" active={side === 'code' && tab !== null} conversation={conversation} tab={tab} />
+      <SidePanel side="chat" active={side === 'chat' && tab !== null} conversation={conversation} tab={tab} />
+    </>
+  )
 })
 
-function Tab({ id, active, label, icon, count, dot, compact }: { id: Panel; active: boolean; label: string; icon: IconName; count?: number; dot?: boolean; compact?: boolean }) {
+/** A hidden side keeps its own props, so a Chat thread cannot reset Code's folder and drafts. */
+function SidePanel({ side, active, conversation, tab }: { side: 'code' | 'chat'; active: boolean; conversation: Conversation | null; tab: Panel | null }) {
+  const [saved, setSaved] = useState({ conversation, tab: tab ?? (side === 'code' ? 'session' : 'context') as Panel })
+  if (active && tab && (saved.conversation !== conversation || saved.tab !== tab)) setSaved({ conversation, tab })
+  const current = active && tab ? { conversation, tab } : saved
+  return (
+    <RetainedView active={active}>
+      {side === 'code' ? <CodePanel {...current} /> : <ChatPanel {...current} />}
+    </RetainedView>
+  )
+}
+
+function PanelSlot({ active, name, fills = false, children }: { active: boolean; name: Panel; fills?: boolean; children: ReactNode }) {
+  return (
+    <RetainedView active={active}>
+      <div className={`h-full min-h-0 ${fills ? 'overflow-hidden' : 'overflow-y-auto'}`} data-workbench-panel={name}>
+        {children}
+      </div>
+    </RetainedView>
+  )
+}
+
+function Tab({ id, group, active, label, icon, count, dot, compact }: { id: Panel; group: 'code' | 'chat'; active: boolean; label: string; icon: IconName; count?: number; dot?: boolean; compact?: boolean }) {
   const setRightPanel = useUi((s) => s.setRightPanel)
   return (
     <button
       type="button"
       role="tab"
-      id={`panel-tab-${id}`}
+      id={`panel-tab-${group}-${id}`}
       aria-selected={active}
-      aria-controls="thread-panel-body"
+      aria-controls={`${group}-panel-body`}
       title={label}
       onClick={() => setRightPanel(id)}
       className={`relative inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors ${
@@ -82,12 +109,17 @@ function Resizer() {
   const width = useCodeUi((s) => s.panelWidth)
   const setPanelWidth = useCodeUi((s) => s.setPanelWidth)
   const [dragging, setDragging] = useState(false)
+  const stopDrag = useRef<(() => void) | null>(null)
+  // A keyboard navigation can hide this Activity before pointerup. Release the global cursor,
+  // selection lock and listeners then, just as on a completed drag.
+  useLayoutEffect(() => () => stopDrag.current?.(), [])
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     const handle = event.currentTarget
     const aside = handle.parentElement
     if (!aside) return
+    stopDrag.current?.()
     event.preventDefault()
     const startX = event.clientX
     const startWidth = aside.getBoundingClientRect().width
@@ -108,17 +140,23 @@ function Resizer() {
       aside.style.width = `${next}px`
     }
     const end = () => {
+      if (stopDrag.current !== end) return
+      stopDrag.current = null
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', end)
       handle.removeEventListener('pointercancel', end)
+      handle.removeEventListener('lostpointercapture', end)
+      if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
       body.cursor = restore.cursor
       body.userSelect = restore.userSelect
       setDragging(false)
       setPanelWidth(next)
     }
+    stopDrag.current = end
     handle.addEventListener('pointermove', move)
     handle.addEventListener('pointerup', end)
     handle.addEventListener('pointercancel', end)
+    handle.addEventListener('lostpointercapture', end)
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -167,7 +205,6 @@ function CodePanel({ conversation, tab }: { conversation: Conversation | null; t
   const git = useGitStatus(root)
   const terminalBusy = useTerminalBusy(root)
   const changes = git?.status?.is_git ? git.status.files.length : (conversation?.changes?.length ?? 0)
-  const fills = tab === 'terminal' || tab === 'files'
 
   return (
     <aside
@@ -181,6 +218,7 @@ function CodePanel({ conversation, tab }: { conversation: Conversation | null; t
           <Tab
             key={id}
             id={id}
+            group="code"
             active={tab === id}
             label={PANE_META[id].label}
             icon={PANE_META[id].icon}
@@ -191,12 +229,12 @@ function CodePanel({ conversation, tab }: { conversation: Conversation | null; t
         ))}
         <IconButton icon="x" label="Close panel" onClick={() => setRightPanel(null)} className="ml-auto" />
       </div>
-      <div id="thread-panel-body" className={`min-h-0 flex-1 ${fills ? 'overflow-hidden' : 'overflow-y-auto'}`} role="tabpanel" aria-labelledby={`panel-tab-${tab}`}>
-        {tab === 'session' && <SessionPanel conversation={conversation} />}
-        {tab === 'changes' && <GitChangesPanel conversation={conversation} />}
-        {tab === 'terminal' && <TerminalPanel conversation={conversation} />}
-        {tab === 'files' && <FilesPanel conversation={conversation} />}
-        {tab === 'mining' && <MiningPanel conversation={conversation} />}
+      <div id="code-panel-body" className="min-h-0 flex-1 overflow-hidden" role="tabpanel" aria-labelledby={`panel-tab-code-${tab}`}>
+        <PanelSlot name="session" active={tab === 'session'}><SessionPanel conversation={conversation} /></PanelSlot>
+        <PanelSlot name="changes" active={tab === 'changes'}><GitChangesPanel conversation={conversation} /></PanelSlot>
+        <PanelSlot name="terminal" active={tab === 'terminal'} fills><TerminalPanel conversation={conversation} /></PanelSlot>
+        <PanelSlot name="files" active={tab === 'files'} fills><FilesPanel conversation={conversation} /></PanelSlot>
+        <PanelSlot name="mining" active={tab === 'mining'}><MiningPanel conversation={conversation} /></PanelSlot>
       </div>
     </aside>
   )
@@ -214,13 +252,13 @@ function ChatPanel({ conversation, tab }: { conversation: Conversation | null; t
       aria-label="Thread panel"
     >
       <div className="flex h-11 shrink-0 items-center gap-0.5 border-b border-ink-200 px-2 dark:border-ink-800" role="tablist" aria-label="Panels">
-        <Tab id="mining" active={tab === 'mining'} label="Mining" icon="pickaxe" />
-        <Tab id="context" active={tab === 'context'} label="Context" icon="info" count={pins} />
+        <Tab id="mining" group="chat" active={tab === 'mining'} label="Mining" icon="pickaxe" />
+        <Tab id="context" group="chat" active={tab === 'context'} label="Context" icon="info" count={pins} />
         <IconButton icon="x" label="Close panel" onClick={() => setRightPanel(null)} className="ml-auto" />
       </div>
-      <div id="thread-panel-body" className="min-h-0 flex-1 overflow-y-auto" role="tabpanel" aria-labelledby={`panel-tab-${tab}`}>
-        {tab === 'mining' && <MiningPanel conversation={conversation} />}
-        {tab === 'context' && <ContextTab conversation={conversation} />}
+      <div id="chat-panel-body" className="min-h-0 flex-1 overflow-hidden" role="tabpanel" aria-labelledby={`panel-tab-chat-${tab}`}>
+        <PanelSlot name="mining" active={tab === 'mining'}><MiningPanel conversation={conversation} /></PanelSlot>
+        <PanelSlot name="context" active={tab === 'context'}><ContextTab key={conversation?.id ?? 'empty'} conversation={conversation} /></PanelSlot>
       </div>
     </aside>
   )

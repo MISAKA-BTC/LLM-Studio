@@ -1,0 +1,404 @@
+LLM Studio Workbench optimization — phase 2 verification
+Date: 2026-11-24
+
+Final gates
+- npm --prefix ui test: 271/271 passed
+- npm --prefix ui run test:workbench: 33/33 passed
+- npm --prefix ui run build: TypeScript and Vite production build passed
+- npm --prefix ui run test:markdown-worker: passed against the final production assets
+- node --test scripts/desktop.test.mjs: 7/7 passed (mocked build orchestration)
+
+The desktop script tests use a writable temporary directory in this environment.
+They do not compile Rust or launch a native Tauri window. No native installer is included.
+
+Work-volume comparison to the phase-1 deliverable
+- Same 1000 conversations, active conversation with 1000 messages, actual App/StrictMode in jsdom.
+- Synthetic dimensions: transcript 600x760; sidebar height 480.
+- Mounted sidebar thread rows: 1000 -> 20.
+- Mounted active messages: 1000 -> 10.
+- All App DOM elements: 31178 -> 680.
+- Both versions retain all 1000 conversations and all 1000 active-conversation messages.
+- Separate 2000-message DOM regression: 9 initially mounted messages with a 600px viewport.
+- A 5000-conversation storage fixture updating one conversation serializes 5000 -> 1 conversation bodies.
+- Serialized storage write values: 7489618 -> 659238 UTF-8 bytes; current and prior indexes are included.
+- Cold hydration storage reads: 2 -> 5003 for that fixture. This tradeoff is recorded, not hidden.
+
+Method limits
+Storage comparisons use a capacity-unlimited in-memory Map, not browser storage/disk/IPC.
+The 5000-conversation fixture may exceed real localStorage quota. Fault-injection unit tests
+separately cover quota, partial writes, corruption, migration, conflicts and deletion recovery.
+DOM comparisons use jsdom and synthetic dimensions, without browser layout or paint. Stored
+Node/jsdom durations are instrumented local observations, not UI latency, FPS or native speed.
+The native runtime, GPU generation and real WebView were not run. Chromium process startup was
+blocked by the execution sandbox earlier in this conversation; no sandbox bypass was used.
+
+Artifact contents
+Full source, current ui/dist, regression tests, benchmark scripts and reports.
+No node_modules, Rust target output, VSCodium source copy or native installer is included.
+The Tauri architecture and runtime/backend source are unchanged by phase 2.
+
+Known build note
+Vite reports that lib/agent/run.ts has both static and dynamic importers and stays in the
+shared graph. This is not a build failure. Optional math/Markdown/grammar splitting is
+validated separately; the main entry itself is not claimed to be smaller.
+
+Detailed methodology and samples
+- WORKBENCH-OPTIMIZATION-JA.md
+- docs/phase2-benchmarks.json
+- docs/phase2-storage-benchmark.json
+- docs/phase2-dom-before.json
+- docs/phase2-dom-after.json
+- docs/ui-markdown-performance.md
+
+
+UNIT TEST OUTPUT
+
+> misaka-studio-ui@0.1.0 test
+> node --test test/*.test.ts
+
+✔ a file as the agent left it is put back as it was (2.778351ms)
+✔ a file the agent created is removed (0.379813ms)
+✔ a file edited since the agent left it is not overwritten — unless the person says so (0.931124ms)
+✔ a created file edited since is not removed without asking (0.352111ms)
+✔ a file gone from disk is reported, and written back when confirmed (0.727347ms)
+✔ an untracked change cannot be reverted, and says why (0.375116ms)
+✔ the note a revert leaves tells the agent to read the file again (0.252391ms)
+✔ a tool call, its result, then an answer: the whole round trip (21.927534ms)
+✔ attachments go to the model with the message, but only the typed text is mined or pinned (0.859277ms)
+✔ an edit under "ask" waits, shows its diff, and a denial leaves the file alone and is told to the model (10.278583ms)
+✔ "Always allow" approves that kind for the rest of the thread (2.959433ms)
+✔ Stop while an approval waits: the call is not run and the run ends (1.089152ms)
+✔ Stop while the reply streams: what arrived is kept, and the call in it never runs (1.171847ms)
+✔ the same call three times in a row is not run the third time, and a fourth ends the run (1.714426ms)
+✔ an empty reply is answered once; a second in a row ends the run (0.827478ms)
+✔ a run stops at the step limit and says so (1.571821ms)
+✔ a write cut off by the token limit is never run, and the model is told to write in parts (0.838415ms)
+✔ read only: an edit is refused and explained, and the prompt never offered it (0.9281ms)
+✔ a policy changed mid-run applies from the next call (0.908781ms)
+✔ a failed request ends the run with the error on the step (0.31835ms)
+✔ an unknown tool is answered with the real ones, and the run goes on (0.742149ms)
+✔ auto edit applies an edit at once and lists it in Changes with its original (0.901199ms)
+✔ a call the model drafted inside its reasoning, cut there by the stop sequence, is the call it meant (0.225721ms)
+✔ calls left mid-flight by a closed window are settled when the next run starts (0.484371ms)
+✔ agent history: repeated tool results both stay, reasoning goes, failed text replies go (0.252992ms)
+✔ the supplied store URL opens before the model runs and each browser click requires approval (14.752972ms)
+✔ an unavailable Tor route ends the run after one request (0.805495ms)
+✔ source analysis falls back to an answer when follow-up tool calls are malformed (0.877484ms)
+✔ the XML-parameter form: the name, and every value verbatim but for one newline at each end (8.343154ms)
+✔ a value that starts with a blank line keeps it: only the format’s own newline goes (0.400173ms)
+✔ inline values (no newlines around them) are read as they are (0.327635ms)
+✔ a reply the stop sequence left open is complete once its </function> arrived (0.564862ms)
+✔ a call cut off inside a value is incomplete, even in a finished reply — it must never run (0.43787ms)
+✔ closing a stopped call reads an unterminated last value up to the close (the model forgot </parameter>) (0.373223ms)
+✔ streaming: a tag still arriving is held back, and a call still arriving is a tool segment, never XML (15.919221ms)
+✔ a lone "<" ending a finished reply is text; a recognisable start of a call is not (0.280763ms)
+✔ Hermes JSON calls, with the mistakes small models make repaired (2.720082ms)
+✔ a JSON call still streaming shows its name as soon as it has one (0.539584ms)
+✔ JSON arguments inside the XML form are read (1.836519ms)
+✔ reasoning is not text, and a call drafted inside it is not a call (0.177448ms)
+✔ a <function=…> block without its <tool_call> wrapper is still a call (0.254433ms)
+✔ a code fence that only wrapped a call is not shown (0.249115ms)
+✔ a value that mentions </parameter> is not cut short there (0.203397ms)
+✔ a closed call that cannot be read is answered with the format, not dropped (0.289276ms)
+✔ only the first call is kept, and a tool response the model imagined goes with the rest (2.496356ms)
+✔ the system prompt mirrors the template, and states the workspace, date and policy (3.58677ms)
+✔ read only offers no tool that changes anything — not even by name (0.387274ms)
+✔ the user’s own system prompt is kept as standing instructions (0.37758ms)
+✔ tool results are one message of <tool_response> blocks, nothing outside them (0.145249ms)
+✔ a long output keeps its head and tail and says what was left out (0.606014ms)
+✔ JSON repair escapes raw control characters and stray backslashes inside strings only (0.167202ms)
+✔ a call’s key ignores the order its arguments were written in (2.238367ms)
+✔ the policy table: reads never ask; edits ask only under "ask"; commands run alone only under "full auto" (2.839903ms)
+✔ arguments are coerced to what the tool declares, and required ones are checked (0.668878ms)
+✔ tool names small models reach for are understood (0.465512ms)
+✔ read_file: numbered lines under a header, and how to read on (2.619231ms)
+✔ read_file of a missing file is an error the model can act on (0.86195ms)
+✔ an edit that must be approved shows its diff first and touches nothing until it runs (6.373444ms)
+✔ an edit that cannot apply is answered at once, without asking anyone (1.693425ms)
+✔ line numbers copied from read_file are taken off old_string and new_string (4.242949ms)
+✔ write_file creates a file, and the change records it as created (0.892947ms)
+✔ write_file under "ask" previews the whole new file, and an identical write changes nothing (7.395044ms)
+✔ read only refuses every change and every command, and says how to get them (0.406173ms)
+✔ an unknown tool is answered with the tools there are (0.454736ms)
+✔ search: one match per line, and a clear answer when there is none (1.211418ms)
+✔ list_files: an indented tree relative to the folder listed (1.077185ms)
+✔ run_command: exit code and both streams for the model, and a stop is said as one (1.109854ms)
+✔ a long command output keeps its head and tail within the cap (0.663251ms)
+✔ numbered lines: right-aligned numbers, a tab, carriage returns dropped (0.130387ms)
+✔ the Changes list keeps the first original, drops a file back where it started, and will not keep huge files (0.526714ms)
+✔ the edit rules mirror the runtime: line endings, line-end whitespace, never indentation (0.372542ms)
+✔ line numbers are stripped only when every line carries one (0.226021ms)
+✔ the language comes from the extension, or from the whole name for files that have none (1.672142ms)
+✔ binary files are known by name, and by a NUL in their first bytes (0.329958ms)
+✔ a text file becomes an attachment with its name, size, content and language (1.096354ms)
+✔ a binary file is refused with a reason, whether its name or its bytes give it away (0.712314ms)
+✔ a file over the limit is cut to it and says so, keeping the original size (5.17132ms)
+✔ a cut inside a multi-byte character drops the partial character instead of ending in U+FFFD (0.493654ms)
+✔ workspace files keep their path, and duplicates are recognised (0.548487ms)
+✔ a true continuation is appended as is (1.528766ms)
+✔ a continuation that restates the end of the answer loses the restatement (0.233532ms)
+✔ a short coincidence is ordinary text, not an overlap (5.386054ms)
+✔ works while the continuation is still arriving (0.277539ms)
+✔ identical texts have no hunks (3.303633ms)
+✔ one changed line in the middle: one hunk, three lines of context either side (0.929722ms)
+✔ removed lines come before added ones in a replacement (1.271808ms)
+✔ changes close together share a hunk; far apart they do not (0.36476ms)
+✔ a created file is all additions from /dev/null (0.636911ms)
+✔ a deleted file is all removals to /dev/null (0.387354ms)
+✔ a last line that gains its newline is a change, marked in the patch (0.348165ms)
+✔ insertion at the top of a file and deletion at its end (0.538272ms)
+✔ a patch reads back to the same hunks and line numbers (1.321063ms)
+✔ every diff applies back to its target, on hundreds of random edits (93.016326ms)
+✔ the diff is minimal on a classic example (0.392512ms)
+✔ a huge rewrite settles for one replacement, quickly, and still applies (106.653416ms)
+✔ a small edit to a long file is exact and fast (9.347609ms)
+✔ line splitting keeps endings and counts like an editor (0.250177ms)
+✔ CRLF lines are compared with their endings but drawn without them (0.473895ms)
+✔ leaving and returning to a file shares the read and retains its completed bytes (5.800559ms)
+✔ the latest forced refresh owns the cache even when an older request finishes last (0.43719ms)
+✔ a workspace invalidation also prevents pending old bytes from repopulating it (0.358721ms)
+✔ same paths in different projects never share file bytes (0.343438ms)
+✔ failed reads can retry, and cached files retain their scroll positions (5.91434ms)
+✔ the file cache evicts the least recently used file at its bound (2.781245ms)
+✔ a 5000-entry explorer renders a bounded window and can reach its last row (0.292582ms)
+✔ directory reads share in-flight work and a late response cannot replace a refresh (0.665224ms)
+✔ the worker highlights source text while escaping HTML and handles unknown languages (89.956086ms)
+✔ file previews share one worker, reuse pending parses and cached colours, and survive worker failure (5.749182ms)
+✔ Chat sends queued follow-ups in order to the original conversation and skips removed items (31.88393ms)
+✔ Code waits for the tool and the final answer before running a queued follow-up (18.721789ms)
+✔ context lengths read the way windows are sized, from the floor class to 2M (24.988792ms)
+✔ tokens arriving in one frame publish one complete snapshot, including reasoning and the first-token time (5.118911ms)
+✔ finishing or stopping before the next frame flushes the latest partial text and cancels the frame (0.339432ms)
+✔ every character of the query must appear, in order (1.953396ms)
+✔ a blank query matches everything, with nothing to highlight (1.166259ms)
+✔ word starts beat letters in the middle of words (0.768078ms)
+✔ a contiguous run beats the same letters spread over word starts (1.277987ms)
+✔ the alignment is the best one, not the first that fits (0.159741ms)
+✔ matching ignores case and highlights exactly the matched text (0.176416ms)
+✔ a query that is the start of the text ranks above the same letters further in (0.227433ms)
+✔ the words of a query match in any order, and all of them must (0.193141ms)
+✔ Japanese titles match, and the ranges stay on the right characters (0.362817ms)
+✔ case folding never moves an index (0.262956ms)
+✔ a long text is matched as a substring, not a scattered subsequence (0.360643ms)
+✔ a quality floor keeps prefixes, acronyms and runs, and drops scattered letters (0.383449ms)
+✔ highlight parts cover the whole text, alternating (0.193081ms)
+✔ a snippet is cut around the hit, with whitespace collapsed and the hit marked (0.425121ms)
+✔ a snippet keeps the words before the hit, starting on a word boundary (0.188705ms)
+✔ a snippet needs every word of the query (0.183317ms)
+✔ a looping reply is detected and cut back to before the loop (2.669506ms)
+✔ the fifteen-times conversation sends the question once and none of the failures (1.495796ms)
+✔ different questions keep their good replies, and failures between them are dropped (1.910952ms)
+✔ a reply being continued is kept, and an asked-again question with a good answer keeps only the newest pair (0.375587ms)
+✔ a short phrase over and over is a loop too, and is cut to one copy (0.31112ms)
+✔ a long answer that loops only at its end keeps its answer (1.807947ms)
+✔ a reply the runtime already cut short for repeating leaves nothing worth sending either (0.410469ms)
+✔ a reply that is only a loop leaves nothing worth sending (0.527005ms)
+✔ a retry hint rides on the question itself, not as a turn of its own (0.546244ms)
+✔ a retry hint is left off when there is no trailing user turn to fold it onto (0.620526ms)
+✔ streamed code avoids highlighting; finished blocks keep copy/wrap state across appended text and completion (96.361623ms)
+✔ safe links keep the external-open route, images never load, raw HTML stays inert, and math still renders (52.505124ms)
+✔ a late parse cannot inject old content after a replacement or an Activity hide/show (8.020818ms)
+✔ a failed worker leaves a large answer readable and asynchronously formats bounded completed answers (73.49372ms)
+✔ a non-responsive worker times out to the complete plain answer and releases queued updates (51.829976ms)
+✔ worker URL policy matches react-markdown for safe, relative and malicious URLs (1.192459ms)
+✔ raw HTML remains text and unsafe links cannot reach an href (10.620379ms)
+✔ GFM tables, task lists, references and fenced source keep their semantics (13.603037ms)
+✔ streaming leaves math and code as source; completed formulas render with safe KaTeX nodes (87.493486ms)
+✔ code, prices and URL dollar signs do not activate the optional math renderer (9.581361ms)
+✔ unchanged blocks retain identities, while a later reference definition correctly changes its block (5.360195ms)
+✔ hundreds of streaming updates run the first and latest parse, without an obsolete backlog (15.536535ms)
+✔ hidden/unmounted messages cancel deliveries and a live reply precedes queued history (0.972687ms)
+✔ ChatGPT-style display math becomes a $$ block and survives the stray-dollar escape (1.983943ms)
+✔ a $$ block the model wrote itself is left exactly as it is (0.92117ms)
+✔ inline forms: \( \) becomes $ $, and math-looking $ $ pairs are kept (0.281474ms)
+✔ dollars that are not delimiters are escaped so they cannot swallow a paragraph (0.544751ms)
+✔ fenced code is never touched (0.295446ms)
+✔ a formula next to prose with a price keeps only the formula (1.499752ms)
+✔ bare exponents, subscripts and Greek letters in an untouched reply are wrapped (0.447004ms)
+✔ a sentence with more than one bare formula wraps each and keeps the Japanese between them (0.206451ms)
+✔ a bare formula and a model-written $…$ formula in the same reply are both handled once (0.230027ms)
+✔ ordinary prose, lone letters and numbers, and unmarked point labels are left alone (0.640105ms)
+✔ a prime after a bare letter is not a derivative — it is what a contraction looks like (0.352401ms)
+✔ inline code is read as source, never as a bare formula (0.230578ms)
+✔ a failed selection stays selected, sends to that model, and can be retried (8.056352ms)
+✔ new chats inherit the last choice; switching chats restores their individual model (0.641207ms)
+✔ rapid changes serialize loads and an older failure cannot clear the newest choice (1.114962ms)
+✔ Stop cancels a reply waiting for model preparation without waiting for the engine (0.515488ms)
+✔ selection survives persisted session hydration before the runtime is available (551.450934ms)
+✔ a burst of streamed tokens publishes once per frame and flushes the complete reply before returning (15.953112ms)
+✔ Stop keeps the last tokens even when the next animation frame has not run (6.635904ms)
+✔ a fresh chat gets a local model even when the stale startup setting names a mining artifact (1.468896ms)
+✔ explicit preferences survive missing files, offline runtimes and unloaded engines (0.285731ms)
+✔ the first default respects a resident model or configured local model and avoids models that do not fit (0.282226ms)
+✔ the input-path search reads names only, including the exact display label of Code sessions (2.77789ms)
+✔ split search preserves the previous title/body scope, snippets, first-message choice and result order (4.602221ms)
+✔ empty and one-character queries never scan messages; title search still works (0.321715ms)
+✔ large no-match histories do no synchronous work and yield repeatedly between bounded slices (3.888124ms)
+✔ an expired idle deadline makes one step and yields; wall-clock budget also yields (0.719215ms)
+✔ only the newest 40 body matches are searched, or fewer when title matches occupy slots (0.822851ms)
+✔ partial result snapshots are cumulative, immutable and stay in recency order (0.287264ms)
+✔ cancelling before or between slices prevents queued callbacks from reading or publishing stale results (0.466183ms)
+✔ reasoning-only length finish retries once without thinking and preserves the question and pinned notes (2.761255ms)
+✔ a failed recovery is surfaced and never loops into a third request (0.539003ms)
+✔ partial answers, normal stops, errors, and thinking already off never trigger a retry (4.28939ms)
+✔ Stop between reasoning and recovery aborts without sending a second request (1.023594ms)
+✔ a reply with no reasoning is all answer (1.801687ms)
+✔ a closed think block at the start is split off, and the answer starts at its first character (0.229646ms)
+✔ an unclosed block is the model still thinking, and a closing tag still arriving is not shown (0.26513ms)
+✔ the opening tag arriving token by token is thinking, not a stray "<" in the answer (0.334725ms)
+✔ an empty think block — a model asked not to think — leaves no reasoning behind (0.180513ms)
+✔ a template that pre-fills <think> leaves only the closing tag, on its own line (0.250608ms)
+✔ a reply that talks about the tags keeps them as text (0.321054ms)
+✔ the live preview is the end of the reasoning, cut at a word boundary (0.254053ms)
+✔ durations read the way the block says them (0.395697ms)
+✔ one changed conversation serializes only that conversation, preserving other records and list order (26.744219ms)
+✔ 1000 navigation changes write one small navigation record and never rewrite history or index (1.319811ms)
+✔ v1 and v2 sessions migrate on data change without removing their original recovery copy (0.734298ms)
+✔ legacy navigation stays small without forcing a migration, including a missing old model preference (0.319152ms)
+✔ quota during migration removes staging records and continues saving in the old format (1.501515ms)
+✔ record, backup and final-index failures leave the previous complete snapshot and retry the newest data (2.465069ms)
+✔ repeated storage failures are reported once until a successful save (0.697652ms)
+✔ a failed final commit also collects records orphaned by replacing the previous index (0.740487ms)
+✔ a valid current index recovers only its listed IDs and never resurrects a deleted legacy conversation (0.973668ms)
+✔ an empty committed index stays empty even when its legacy and previous backups contain conversations (0.55657ms)
+✔ a damaged primary index falls back to the previous snapshot without overwriting the damaged source on read (0.352422ms)
+✔ a primary index with duplicate conversation IDs is rejected in favor of a complete previous snapshot (1.368293ms)
+✔ unrecoverable legacy or per-conversation corruption blocks automatic overwrite and retains the original bytes (0.574186ms)
+✔ a damaged navigation record cannot hide history or inject a replacement conversations array (0.308455ms)
+✔ obsolete record versions are collected while the current and previous versions remain readable (0.399563ms)
+✔ a stale window cannot overwrite a newer committed history snapshot (0.267203ms)
+✔ invalid duplicate IDs are refused without corrupting a legacy or segmented snapshot (0.277939ms)
+✔ rehydration cancels an older queued write, and clear removes all owned records without touching other keys (0.452612ms)
+✔ an interrupted clear leaves a tombstone so legacy or backup data cannot reappear (0.256516ms)
+✔ automatic migration yields after 16 records and commits only after every record is present (1.058086ms)
+✔ pagehide flush finishes a staged migration and the newer edit queued while it was yielding (0.770102ms)
+✔ rehydration during staging drops only uncommitted records and leaves the last committed session (0.333353ms)
+✔ a folder is matched without its trailing separator (0.959738ms)
+✔ sessions are grouped by folder, the folder with the newest activity first (0.854529ms)
+✔ starred sessions float to the top of their project (0.174513ms)
+✔ recent folders without sessions follow, in the order they were used, and only once (0.161614ms)
+✔ sessions without a folder are listed last, under their own heading (0.224799ms)
+✔ nothing to show is an empty list (0.097618ms)
+✔ ages are short enough for a sidebar row (0.408245ms)
+✔ a dirty tree is summed up in a line, a clean one not at all (0.168565ms)
+✔ an untouched session is called a session (0.163777ms)
+✔ an agent thread is on the Code side, every other thread on the Chat side (6.830643ms)
+✔ the most recent thread is picked within the side only (0.190387ms)
+✔ switching sides comes back to the thread the side had open (0.131669ms)
+✔ a remembered thread that is gone or changed sides falls back to the newest on the side (0.108654ms)
+✔ a side with no threads opens on nothing — its empty page (0.115094ms)
+✔ a new session goes where the work is: the session in view, the last session, the last folder (0.152ms)
+✔ the slash token is read while it is typed: the name first, then the argument (2.04893ms)
+✔ the menu lists every command for a bare slash, and the matching ones as the name is typed (0.988961ms)
+✔ only a known command is a command: anything else is sent as the message it is (0.302186ms)
+✔ on and off, in the spellings people use (0.189266ms)
+✔ a model is found from any part of its name (0.714918ms)
+✔ a mention starts at an @ that begins a word and runs to the caret (0.611713ms)
+✔ choosing a file replaces the mention with its path and puts the caret after it (0.321395ms)
+✔ an argument is single-quoted, and a quote inside it closes, escapes and reopens (1.078356ms)
+✔ a command runs in the directory with a cd prefix; the folder itself needs none (0.294474ms)
+✔ the prompt names the folder and the directory within it (0.119511ms)
+✔ a lone cd is recognised with its argument; anything else is left to the shell (1.006158ms)
+✔ what cd cannot do here is said, not guessed (0.166492ms)
+✔ relative paths resolve against the directory, with . and .. (0.47756ms)
+✔ leaving the folder is refused, however it is spelled (0.446043ms)
+✔ an absolute path or ~ path inside the folder is turned into a relative one (0.319892ms)
+✔ cd - goes back to the previous directory, when there is one (0.15284ms)
+✔ normalising a relative path keeps POSIX backslashes as characters (0.170908ms)
+✔ history keeps one copy of each command, newest last, and at most its limit (0.626034ms)
+✔ ↑ walks back to the oldest command and ↓ returns to the line being typed (0.124217ms)
+✔ output keeps one segment per run of a stream (0.245069ms)
+✔ past the cap the start goes and the tail is kept, cut at a line break (11.04644ms)
+✔ a cap that drops a whole segment drops it, and stderr stays where it was in the tail (0.349137ms)
+✔ escapes are removed and a redrawn line shows only its last drawing (0.193221ms)
+✔ durations read the way a person says them (0.136366ms)
+✔ the outcome says how the command ended (0.216726ms)
+✔ a transcript is the prompt and command, the output, and the outcome (0.216025ms)
+✔ a block becomes a text attachment named for its command (0.357289ms)
+✔ an attachment past the limit keeps the end of the output, where the verdict is (8.236834ms)
+✔ a 10,000-message conversation mounts only its viewport and overscan, including the very first and last messages (3.970038ms)
+✔ variable-height boundaries and end offsets resolve to the correct message (1.10005ms)
+✔ measuring earlier rows preserves the visible message and its offset instead of jumping the reader (0.278009ms)
+✔ repeated live-row measurements update total height without changing preceding offsets (1.996001ms)
+✔ empty, invalid and temporarily hidden measurements keep a usable index (0.170978ms)
+✔ Web requires explicit consent, mining off and a local engine; off and legacy settings stay offline (1.102823ms)
+✔ Chat offers only Web tools; Code offers them only with Web enabled (1.38557ms)
+✔ research returns cited evidence, propagates cancellation and rechecks consent before executing (1.506633ms)
+✔ tool evidence is bounded and identified as untrusted data (0.189636ms)
+✔ website requests retain the hash route and explicit implementation stays in Code (1.653404ms)
+✔ a website summary can read rendered text without pausing for browser approval (1.011336ms)
+ℹ tests 271
+ℹ suites 0
+ℹ pass 271
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2094.945452
+
+WORKBENCH DOM OUTPUT
+
+> misaka-studio-ui@0.1.0 test:workbench
+> node scripts/test-workbench.mjs
+
+PASS retained panes mount on first visit and keep their DOM/state while pausing effects
+PASS revealing an existing approval does not move keyboard focus onto Approve
+PASS unvisited screens do not eagerly load their APIs
+PASS chat draft, selection, transcript node and reading position survive navigation
+PASS Models keeps the selected Discover tab and its search draft
+PASS an unsaved message edit keeps its text and selection when the chat is restored
+PASS Monitor keeps the newest 120 samples while hidden without recording again on reveal
+PASS Settings preserves unsaved values and its scroll container
+PASS hidden Settings stops install polling and resumes exactly one poll on return
+PASS one main surface is visible and window subscriptions survive repeated navigation
+PASS returning to a recent conversation reuses its transcript and shows updates made while hidden
+PASS a fourth recent transcript evicts only the least recently viewed DOM, preserving all messages
+PASS visiting an empty new chat retains recent transcripts and its own unsent draft
+PASS Files renders only the visible rows of a 5000-entry folder and supports End/Home
+PASS file previews retain their DOM and reading position across panel switches without rereading
+PASS the same file path in two projects never displays bytes from the other project
+PASS Terminal keeps an unsent command and reading position through tab, close and Chat/Code switches
+PASS Terminal drafts stay with their project and no command runs when a panel is restored
+Virtual transcript DOM: 9 of 2000 message rows mounted initially.
+PASS a 2,000-message thread mounts a bounded initial viewport without truncating history
+PASS scrolling a virtual transcript reaches its oldest, middle and newest messages
+PASS live tokens update one row without filtering history again or moving an upward-scrolled reader
+PASS editing the last user message reaches an unmounted row and preserves its draft while scrolled away
+PASS pending approval remains reachable through an explicit review action after virtualization
+PASS measuring a row above the viewport preserves the reading anchor
+PASS measured content growth follows the bottom only while the user is following
+PASS open tabs switch conversations and close without deleting history or drafts
+PASS Activity bar stays mounted while sidebar scroll and keyboard resizing are retained
+PASS 5000 conversation sidebar mounts one window and keyboard End/Home reaches the entire archive
+PASS Quick Open searches titles, honors IME and opens by Enter without scanning message bodies
+PASS tab bookkeeping stays bounded and deleting history removes its tab
+PASS Quick Open file requests discard a stale response after the query changes
+PASS command palette shows titles immediately, then merges body matches without changing an explicit keyboard selection
+PASS command palette discards previous-query results immediately and cancels queued searches on query change or close
+
+Workbench DOM checks: 33/33 passed.
+These are state/lifecycle checks; no browser latency measurement is claimed.
+
+PRODUCTION WORKER OUTPUT
+
+> misaka-studio-ui@0.1.0 test:markdown-worker
+> node scripts/test-markdown-worker.mjs
+
+PASS production Markdown worker: DOM-free startup, entities, GFM, lazy math, URL/HTML safety, stable blocks
+
+DESKTOP SCRIPT OUTPUT
+✔ darwin build replaces a stale staged runtime after building the UI (2.615625ms)
+✔ darwin dev replaces a stale staged runtime after building the UI (0.669871ms)
+✔ win32 build replaces a stale staged runtime after building the UI (0.64272ms)
+✔ win32 dev replaces a stale staged runtime after building the UI (0.735169ms)
+✔ linux build replaces a stale staged runtime after building the UI (0.794007ms)
+✔ linux dev replaces a stale staged runtime after building the UI (0.747227ms)
+✔ a failed build aborts packaging instead of silently using a stale resource (0.81602ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 118.527218

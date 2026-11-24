@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defaultClientConditions, defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -16,6 +16,11 @@ export default defineConfig({
   // Relative asset URLs: the same bundle is served by the runtime at `/` and loaded by the Tauri
   // shell from the filesystem, and an absolute `/assets/...` path resolves in only one of those.
   base: './',
+  // Markdown workers load optional math support on demand; ES workers support those split chunks.
+  worker: { format: 'es' },
+  // Markdown's entity decoder and KaTeX HTML-to-AST adapter offer DOM-free worker exports.
+  // Use those in both the worker and the delayed fallback, which share the same processor.
+  resolve: { conditions: ['worker', ...defaultClientConditions] },
   server: {
     port: 5173,
     strictPort: true,

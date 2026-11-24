@@ -13,6 +13,7 @@ import { ApiError, api, execStream } from '../../lib/api'
 import { EMPTY_OUTPUT, appendOutput, parseCd, resolveCd, withCwd, type BlockOutput, type BlockStatus, type OutputStream, type ShellFlavor } from '../../lib/terminal'
 import { useCodeUi } from './codeStore'
 import { isMissingEndpoint, scheduleGitRefresh } from './gitStore'
+import { fileCache } from './fileCache'
 
 export type TerminalBlock = {
   id: string
@@ -44,6 +45,20 @@ export type TerminalSession = {
 export const EMPTY_SESSION: TerminalSession = { cwd: '', previous: null, blocks: [], running: null }
 
 export const useTerminals = create<{ byRoot: Record<string, TerminalSession> }>(() => ({ byRoot: {} }))
+
+// Unsubmitted input survives panel and project switches. It is kept apart from output so typing
+// does not redraw the scrollback, or persist the entire shell history on every keystroke.
+const useTerminalDrafts = create<{ byRoot: Record<string, string> }>(() => ({ byRoot: {} }))
+export const useTerminalDraft = (root: string): string => useTerminalDrafts((s) => s.byRoot[root] ?? '')
+export function setTerminalDraft(root: string, text: string): void {
+  useTerminalDrafts.setState((s) => {
+    if ((s.byRoot[root] ?? '') === text) return s
+    const byRoot = { ...s.byRoot }
+    if (text) byRoot[root] = text
+    else delete byRoot[root]
+    return { byRoot }
+  })
+}
 
 /** Blocks kept per folder, and output kept across them; the oldest go first. Each block keeps its
  *  own tail too (`MAX_BLOCK_CHARS`), but a long session of noisy builds would still add up. */
@@ -232,6 +247,7 @@ export async function runCommand(root: string, input: string, env: TerminalEnv, 
     if (controllers.get(root) === controller) controllers.delete(root)
     update(root, (s) => (s.running === id ? { ...s, running: null } : s))
     // A command is the likeliest thing to have changed the working tree.
+    fileCache.invalidate(root)
     scheduleGitRefresh(root, 300)
   }
 }
