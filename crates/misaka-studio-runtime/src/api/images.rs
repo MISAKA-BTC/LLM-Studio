@@ -30,6 +30,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/models", get(list_image_models))
         .route("/models/refresh", post(refresh_image_models))
+        .route("/models/download", post(download_image_model))
         .route("/models/{id}/load", post(load_image_model))
         .route("/models/unload", post(unload_image_model))
         .route("/runtime", get(image_runtime_status))
@@ -53,15 +54,39 @@ fn view(model: &LocalImageModel, hardware: &HardwareSnapshot) -> ImageModelView 
     ImageModelView { requirements, fit_summary: fit.summary(), fit, model: model.clone() }
 }
 
-async fn list_image_models(State(state): State<Arc<AppState>>) -> Json<Vec<ImageModelView>> {
+async fn collect_image_views(state: &AppState) -> Vec<ImageModelView> {
     let models = state.store.list_images().await;
-    Json(models.iter().map(|m| view(m, &state.hardware)).collect())
+    let mut views: Vec<ImageModelView> = models.iter().map(|m| view(m, &state.hardware)).collect();
+    if state.image_backend().await.name() == "mock" && !views.iter().any(|v| v.model.id == "mock-preview") {
+        views.insert(0, view(&AppState::mock_preview_image_model(), &state.hardware));
+    }
+    views
+}
+
+async fn list_image_models(State(state): State<Arc<AppState>>) -> Json<Vec<ImageModelView>> {
+    Json(collect_image_views(&state).await)
 }
 
 async fn refresh_image_models(State(state): State<Arc<AppState>>) -> Result<Json<Vec<ImageModelView>>> {
     state.store.refresh().await?;
-    let models = state.store.list_images().await;
-    Ok(Json(models.iter().map(|m| view(m, &state.hardware)).collect()))
+    Ok(Json(collect_image_views(&state).await))
+}
+
+#[derive(Deserialize)]
+struct DownloadImageBody {
+    repo: String,
+}
+
+async fn download_image_model(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DownloadImageBody>,
+) -> Result<Json<crate::download::DownloadProgress>> {
+    let repo_id = body.repo.trim();
+    let catalog = state.catalog().await;
+    let (repo, variant) = catalog.diffusers_repo(repo_id).await?;
+    let models_dir = state.settings.read().await.models_dir.clone();
+    let progress = state.downloads.start_variant(&catalog, state.store.clone(), models_dir, repo, variant).await?;
+    Ok(Json(progress))
 }
 
 #[derive(Deserialize)]

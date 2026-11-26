@@ -15,7 +15,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ use std::sync::Arc;
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
         .route("/browse", get(browse))
+        .route("/pick-folder", post(pick_folder))
         .route("/open", post(open))
         .route("/tree", post(tree))
         .route("/files", post(files))
@@ -35,6 +36,9 @@ pub fn router() -> axum::Router<Arc<AppState>> {
         .route("/exec/stream", post(exec_stream))
         .route("/git/status", post(git_status))
         .route("/git/diff", post(git_diff))
+        .route("/git/branches", post(git_branches))
+        .route("/git/checkout", post(git_checkout))
+        .route("/git/worktree", post(git_worktree))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -206,6 +210,19 @@ pub struct GitStatusBody {
     /// Badges need changed paths and branch state, not a content diff of every changed file.
     #[serde(default, deserialize_with = "lenient::bool_opt")]
     pub include_counts: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitBranchesBody {
+    pub root: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitCheckoutBody {
+    pub root: String,
+    pub branch: String,
+    #[serde(default, deserialize_with = "lenient::bool_opt")]
+    pub create: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -381,6 +398,81 @@ async fn git_diff(Body(body): Body<GitDiffBody>) -> Result<Json<git::GitDiff>> {
     })
     .await?;
     git::diff(&root, path.as_deref()).await.map(Json)
+}
+
+async fn git_branches(Body(body): Body<GitBranchesBody>) -> Result<Json<git::GitBranches>> {
+    let root = blocking(move || Workspace::open(&body.root)).await?;
+    git::branches(&root).await.map(Json)
+}
+
+async fn git_checkout(Body(body): Body<GitCheckoutBody>) -> Result<Json<git::GitStatus>> {
+    let root = blocking(move || Workspace::open(&body.root)).await?;
+    git::checkout(&root, &body.branch, body.create.unwrap_or(false)).await.map(Json)
+}
+
+async fn git_worktree(Body(body): Body<GitBranchesBody>) -> Result<Json<git::GitWorktreeCreated>> {
+    let root = blocking(move || Workspace::open(&body.root)).await?;
+    git::create_worktree(&root).await.map(Json)
+}
+
+#[derive(Serialize)]
+struct PickFolderResponse {
+    path: Option<String>,
+}
+
+/// Open the operating system's native folder picker dialog so the user never has to hunt through
+/// raw filesystem trees inside the webview.
+async fn pick_folder() -> Result<Json<PickFolderResponse>> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = tokio::process::Command::new("osascript")
+            .args(["-e", "POSIX path of (choose folder with prompt \"プロジェクトフォルダを選択\")"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+            .map_err(|e| Error::bad_request(format!("could not open Finder dialog: {e}")))?;
+        if !output.status.success() {
+            // User cancelled (-128) — return `path: null` cleanly without an error toast.
+            return Ok(Json(PickFolderResponse { path: None }));
+        }
+        let chosen = String::from_utf8_lossy(&output.stdout).trim().trim_end_matches('/').to_string();
+        let path = if chosen.is_empty() { "/".to_string() } else { chosen };
+        return Ok(Json(PickFolderResponse { path: Some(path) }));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = tokio::process::Command::new("zenity")
+            .args(["--file-selection", "--directory", "--title=Select Project Folder"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                return Ok(Json(PickFolderResponse { path: (!chosen.is_empty()).then_some(chosen) }));
+            }
+            return Ok(Json(PickFolderResponse { path: None }));
+        }
+        return Ok(Json(PickFolderResponse { path: None }));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }";
+        if let Ok(output) = tokio::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", script])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let chosen = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                return Ok(Json(PickFolderResponse { path: (!chosen.is_empty()).then_some(chosen) }));
+            }
+        }
+        return Ok(Json(PickFolderResponse { path: None }));
+    }
 }
 
 #[cfg(test)]

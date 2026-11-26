@@ -8,7 +8,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { createPreferenceStorage } from '../lib/preferenceStorage'
-import type { Attachment } from '../lib/types'
+import type { ApprovalPolicy, Attachment } from '../lib/types'
 
 /** What the panel on the right of the chat shows, when it shows anything. `session`, `terminal`
  *  and `files` belong to Code; the rest are shared. */
@@ -21,6 +21,7 @@ export type RightPanel = 'session' | 'changes' | 'terminal' | 'files' | 'mining'
  */
 export type AppMode = 'chat' | 'code'
 export type ModelsTab = 'installed' | 'discover'
+export type BottomPanelTab = 'terminal' | 'output'
 
 type UiState = {
   appMode: AppMode
@@ -30,6 +31,9 @@ type UiState = {
   collapsedProjects: string[]
   sidebarOpen: boolean
   sidebarWidth: number
+  bottomPanelOpen: boolean
+  bottomPanelHeight: number
+  bottomPanelTab: BottomPanelTab
   quickOpen: boolean
   paletteOpen: boolean
   /** What the palette's input starts with when it opens — "load model " from the status bar's
@@ -51,16 +55,26 @@ type UiState = {
   recentWorkspaces: string[]
   /** Active sub-tab in Models view (Installed library vs Model Search). */
   modelsTab: ModelsTab
+  /** True when the user explicitly chose "No Project" / "Skip" in the composer project selector. */
+  noProject: boolean
+  /** Default execution approval mode ("Turbo" = full_auto). */
+  defaultApproval: ApprovalPolicy
 
   /** Only the flag. Switching sides — remembering and restoring each side's thread — is
    *  `switchAppMode` in `components/shell/actions.ts`. */
   setAppMode: (mode: AppMode) => void
   setModelsTab: (tab: ModelsTab) => void
+  setNoProject: (noProject: boolean) => void
+  setDefaultApproval: (policy: ApprovalPolicy) => void
   rememberThread: (mode: AppMode, id: string | null) => void
   toggleProject: (path: string) => void
   setSidebarOpen: (open: boolean) => void
   toggleSidebar: () => void
   setSidebarWidth: (width: number) => void
+  setBottomPanelOpen: (open: boolean) => void
+  toggleBottomPanel: () => void
+  setBottomPanelHeight: (height: number) => void
+  setBottomPanelTab: (tab: BottomPanelTab) => void
   setQuickOpen: (open: boolean) => void
   setPaletteOpen: (open: boolean) => void
   /** Open the palette, optionally with its input filled in. */
@@ -86,6 +100,9 @@ export const useUi = create<UiState>()(
       collapsedProjects: [],
       sidebarOpen: true,
       sidebarWidth: 256,
+      bottomPanelOpen: false,
+      bottomPanelHeight: 220,
+      bottomPanelTab: 'terminal',
       quickOpen: false,
       paletteOpen: false,
       paletteQuery: '',
@@ -98,9 +115,13 @@ export const useUi = create<UiState>()(
       thinking: true,
       recentWorkspaces: [],
       modelsTab: 'installed',
+      noProject: false,
+      defaultApproval: 'full_auto',
 
       setAppMode: (appMode) => set({ appMode }),
       setModelsTab: (modelsTab) => set({ modelsTab }),
+      setNoProject: (noProject) => set({ noProject }),
+      setDefaultApproval: (defaultApproval) => set({ defaultApproval }),
       rememberThread: (mode, id) => set((s) => (s.lastThread[mode] === id ? {} : { lastThread: { ...s.lastThread, [mode]: id } })),
       toggleProject: (path) =>
         set((s) => ({
@@ -109,6 +130,10 @@ export const useUi = create<UiState>()(
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       setSidebarWidth: (width) => set({ sidebarWidth: Number.isFinite(width) ? Math.max(200, Math.min(420, Math.round(width))) : 256 }),
+      setBottomPanelOpen: (bottomPanelOpen) => set({ bottomPanelOpen }),
+      toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
+      setBottomPanelHeight: (height) => set({ bottomPanelHeight: Number.isFinite(height) ? Math.max(140, Math.min(480, Math.round(height))) : 220 }),
+      setBottomPanelTab: (bottomPanelTab) => set({ bottomPanelTab }),
       setQuickOpen: (quickOpen) => set(quickOpen ? { quickOpen, paletteOpen: false, shortcutsOpen: false } : { quickOpen }),
       setPaletteOpen: (paletteOpen) => set(paletteOpen ? { paletteOpen, quickOpen: false } : { paletteOpen }),
       openPalette: (query = '') => set({ paletteOpen: true, paletteQuery: query, quickOpen: false }),

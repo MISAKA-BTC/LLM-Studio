@@ -53,6 +53,8 @@ import type {
   WorkspaceExec,
   GitStatus,
   GitDiff,
+  GitBranches,
+  GitWorktreeCreated,
   ExecStreamEvent,
 } from './types'
 
@@ -222,6 +224,8 @@ export const api = {
   // `crates/misaka-studio-runtime/src/backend/diffusion.rs`.
   imageModels: () => request<ImageModelView[]>('/api/v1/images/models'),
   refreshImageModels: () => request<ImageModelView[]>('/api/v1/images/models/refresh', { method: 'POST' }),
+  downloadImageModel: (repo: string) =>
+    request<DownloadProgress>('/api/v1/images/models/download', { method: 'POST', body: JSON.stringify({ repo }) }),
   loadImageModel: (id: string, dtype?: 'fp16' | 'bf16' | 'fp32') =>
     request<ImageRuntimeStatus>(`/api/v1/images/models/${encodeURIComponent(id)}/load`, {
       method: 'POST',
@@ -239,6 +243,7 @@ export const api = {
   workspace: {
     browse: (path?: string | null, hidden = false) =>
       request<BrowseView>(`/api/v1/workspace/browse?${new URLSearchParams({ ...(path ? { path } : {}), ...(hidden ? { hidden: 'true' } : {}) })}`),
+    pickFolder: () => request<{ path: string | null }>('/api/v1/workspace/pick-folder', { method: 'POST' }),
     open: (root: string) => request<WorkspaceInfo>('/api/v1/workspace/open', { method: 'POST', body: JSON.stringify({ root }) }),
     tree: (root: string, path = '.', depth?: number, limit?: number) =>
       request<WorkspaceTree>('/api/v1/workspace/tree', { method: 'POST', body: JSON.stringify({ root, path, depth, limit }) }),
@@ -271,6 +276,12 @@ export const api = {
     /** The unified diff of the working tree against HEAD — for one path, or the whole tree. */
     gitDiff: (root: string, path?: string | null, signal?: AbortSignal) =>
       request<GitDiff>('/api/v1/workspace/git/diff', { method: 'POST', body: JSON.stringify({ root, path: path ?? null }), signal }),
+    gitBranches: (root: string, signal?: AbortSignal) =>
+      request<GitBranches>('/api/v1/workspace/git/branches', { method: 'POST', body: JSON.stringify({ root }), signal }),
+    gitCheckout: (root: string, branch: string, create = false) =>
+      request<GitStatus>('/api/v1/workspace/git/checkout', { method: 'POST', body: JSON.stringify({ root, branch, create }) }),
+    gitWorktree: (root: string) =>
+      request<GitWorktreeCreated>('/api/v1/workspace/git/worktree', { method: 'POST', body: JSON.stringify({ root }) }),
   },
 }
 

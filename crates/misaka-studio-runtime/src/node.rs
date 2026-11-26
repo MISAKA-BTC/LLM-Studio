@@ -58,13 +58,12 @@ pub fn resolve_misaka_cli(configured: Option<&PathBuf>) -> PathBuf {
 
 /// The chain as each public node of the network reports it.
 pub async fn public_status(network: NodeNetwork) -> Vec<NodeStatus> {
-    let mut out = Vec::new();
-    for node in public_wrpc(network) {
+    let futures = public_wrpc(network).iter().map(|node| async move {
         let mut status = query_status(node.wrpc_json).await;
         status.source = node.name.to_string();
-        out.push(status);
-    }
-    out
+        status
+    });
+    futures_util::future::join_all(futures).await
 }
 
 /// One call against a node's JSON endpoint.
@@ -140,7 +139,7 @@ pub struct NodeStatus {
 /// Read a node's status. Partial answers are kept: a node that answers `getInfo` but not the DAG
 /// call is still reachable, and half a picture beats an error page.
 pub async fn query_status(url: &str) -> NodeStatus {
-    let timeout = Duration::from_secs(4);
+    let timeout = Duration::from_millis(2500);
     let mut status = NodeStatus { rpc_url: url.to_string(), ..Default::default() };
 
     match wrpc_call(url, "getInfo", json!({}), timeout).await {

@@ -23,10 +23,11 @@ import { useVisiblePolling } from './shell/useVisiblePolling'
 import { bytes, count } from '../lib/format'
 import type { NetworkOverview, NodeClassRow, NodeStatus, PalwClassStatus, Settings } from '../lib/types'
 import { useStudio } from '../store/studio'
-import { CopyButton, EmptyState, Field, Icon, Section, Spinner } from './common'
+import { CopyButton, Field, Icon, Section, Spinner } from './common'
 
 export function NetworkView() {
   const [overview, setOverview] = useState<NetworkOverview | null>(null)
+  const [localClasses, setLocalClasses] = useState<PalwClassStatus[]>([])
   const [error, setError] = useState<string | null>(null)
   const toast = useStudio((s) => s.toast)
   const settings = useStudio((s) => s.settings)
@@ -35,6 +36,16 @@ export function NetworkView() {
   const acceptOverview = useCallback((value: NetworkOverview) => { setOverview(value); setError(null) }, [])
   const readFailed = useCallback((error: unknown) => setError(error instanceof Error ? error.message : String(error)), [])
   useVisiblePolling(api.network, acceptOverview, 10_000, readFailed)
+
+  useEffect(() => {
+    let alive = true
+    void api.networkClasses().then((items) => {
+      if (alive) setLocalClasses(items)
+    }).catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const downloadArtifact = async (name: string) => {
     try {
@@ -46,20 +57,14 @@ export function NetworkView() {
     }
   }
 
-  if (!overview) {
-    return (
-      <EmptyState icon="globe" title="Reading the network state">
-        {error ?? 'One moment…'}
-      </EmptyState>
-    )
-  }
+  const classes = overview?.classes ?? localClasses
 
   return (
     <div className="h-full overflow-y-auto p-4">
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           {settings && <PromptStackPanel settings={settings} save={saveSettings} />}
-          <PublicChainPanel nodes={overview.public_nodes} />
+          <PublicChainPanel nodes={overview?.public_nodes ?? null} error={error} />
 
           <section className="card p-5">
             <div className="flex items-baseline justify-between">
@@ -71,9 +76,16 @@ export function NetworkView() {
               converted artifact, and the worker refuses any file that does not verify to the registered root.
             </p>
             <div className="mt-4 space-y-3">
-              {overview.classes.map((cls) => (
-                <ClassCard key={cls.spec.name} cls={cls} nodeRows={[]} onDownload={downloadArtifact} />
-              ))}
+              {classes.length === 0 ? (
+                <div className="flex items-center gap-2 py-3 text-xs text-ink-500 dark:text-ink-400">
+                  <Spinner className="size-3.5" />
+                  <span>Loading registered PALW classes…</span>
+                </div>
+              ) : (
+                classes.map((cls) => (
+                  <ClassCard key={cls.spec.name} cls={cls} nodeRows={[]} onDownload={downloadArtifact} />
+                ))
+              )}
             </div>
           </section>
         </div>
@@ -91,7 +103,7 @@ export function NetworkView() {
 }
 
 /** The chain as the public nodes report it. One node's word apiece — never a proof. */
-function PublicChainPanel({ nodes }: { nodes: NodeStatus[] }) {
+function PublicChainPanel({ nodes, error }: { nodes: NodeStatus[] | null; error: string | null }) {
   return (
     <section className="card p-5">
       <div className="flex items-baseline justify-between">
@@ -102,29 +114,45 @@ function PublicChainPanel({ nodes }: { nodes: NodeStatus[] }) {
         This Studio runs no node. It reads the chain through the network&apos;s public wRPC nodes — the same ones the gateway, the
         rail and the remote miner use.
       </p>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        {nodes.map((n) => (
-          <div key={n.rpc_url} className="rounded-lg border border-ink-200 p-3 text-xs dark:border-ink-800">
-            <div className="flex items-center justify-between">
-              <span className="font-medium">{n.source}</span>
-              <span className={n.reachable ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>
-                {n.reachable ? (n.is_synced ? 'synced' : 'syncing') : 'unreachable'}
-              </span>
+      {nodes === null ? (
+        <div className="mt-3 flex items-center gap-2 rounded-[4px] border border-ink-200 bg-ink-50/60 px-3 py-2.5 text-xs text-ink-600 dark:border-ink-800 dark:bg-[#1e1e1e] dark:text-ink-300">
+          {error ? (
+            <>
+              <Icon name="warning" className="size-3.5 shrink-0 text-amber-500" />
+              <span>Could not reach public wRPC nodes: {error}</span>
+            </>
+          ) : (
+            <>
+              <Spinner className="size-3.5 shrink-0 text-arc-500" />
+              <span>Checking public wRPC nodes…</span>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {nodes.map((n) => (
+            <div key={n.rpc_url} className="rounded-lg border border-ink-200 p-3 text-xs dark:border-ink-800">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{n.source}</span>
+                <span className={n.reachable ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>
+                  {n.reachable ? (n.is_synced ? 'synced' : 'syncing') : 'unreachable'}
+                </span>
+              </div>
+              <div className="mono mt-1 break-all text-[0.65rem] text-ink-500 dark:text-ink-400">{n.rpc_url}</div>
+              {n.reachable ? (
+                <dl className="mt-2 grid grid-cols-2 gap-2">
+                  <StatRow label="DAA score" value={n.virtual_daa_score !== null ? count(n.virtual_daa_score) : '—'} />
+                  <StatRow label="Network" value={n.network ?? '—'} />
+                </dl>
+              ) : (
+                <p className="mt-2 text-red-600 dark:text-red-400">{n.error}</p>
+              )}
+              {n.reachable && <ChainClock status={n} />}
             </div>
-            <div className="mono mt-1 break-all text-[0.65rem] text-ink-500 dark:text-ink-400">{n.rpc_url}</div>
-            {n.reachable ? (
-              <dl className="mt-2 grid grid-cols-2 gap-2">
-                <StatRow label="DAA score" value={n.virtual_daa_score !== null ? count(n.virtual_daa_score) : '—'} />
-                <StatRow label="Network" value={n.network ?? '—'} />
-              </dl>
-            ) : (
-              <p className="mt-2 text-red-600 dark:text-red-400">{n.error}</p>
-            )}
-            {n.reachable && <ChainClock status={n} />}
-          </div>
-        ))}
-        {nodes.length === 0 && <p className="text-xs text-ink-500">This network publishes no public wRPC.</p>}
-      </div>
+          ))}
+          {nodes.length === 0 && <p className="text-xs text-ink-500">This network publishes no public wRPC.</p>}
+        </div>
+      )}
     </section>
   )
 }

@@ -163,11 +163,11 @@ export function ContextReportView({ report }: { report: ContextReport }) {
   const warnings = warningsOf(report)
   const rows: [string, string][] = [
     ...(report.backend ? [['Engine', report.backend] as [string, string]] : []),
-    ['Window', `${tokens(report.window)} tokens`],
-    ['Reserved for the answer', `${report.answer_reserve.toLocaleString()} tokens`],
-    ['Prompt', `${report.prompt_tokens.toLocaleString()} of ${report.prompt_budget.toLocaleString()} tokens`],
-    ['Counted with', report.counter.kind === 'tokenizer' ? "the model's tokenizer" : 'an estimate (no tokenizer found)'],
-    ['Pinned notes', report.pinned_omitted > 0 ? `${report.pinned_included} sent, ${report.pinned_omitted} did not fit` : `${report.pinned_included} sent`],
+    ['Window', `${tokens(report.window ?? 0)} tokens`],
+    ['Reserved for the answer', `${(report.answer_reserve ?? 0).toLocaleString()} tokens`],
+    ['Prompt', `${(report.prompt_tokens ?? 0).toLocaleString()} of ${(report.prompt_budget ?? 0).toLocaleString()} tokens`],
+    ['Counted with', report.counter?.kind === 'tokenizer' ? "the model's tokenizer" : 'an estimate (no tokenizer found)'],
+    ['Pinned notes', (report.pinned_omitted ?? 0) > 0 ? `${report.pinned_included ?? 0} sent, ${report.pinned_omitted} did not fit` : `${report.pinned_included ?? 0} sent`],
   ]
   if (report.continuation) rows.push(['Shape', 'continuing a cut-off reply'])
   // A conversation that fitted was sent whole; the manager's split of it is only meaningful when it chose.

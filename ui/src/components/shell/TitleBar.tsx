@@ -11,7 +11,7 @@ import { folderName } from '../../lib/agent/workspace'
 import { formatShortcut } from '../../lib/keys'
 import { chatModelId, useStudio } from '../../store/studio'
 import { useUi, type AppMode } from '../../store/ui'
-import { effectivePanel, togglePane } from '../code/shared'
+import { effectivePanel, sideOf as paneSide } from '../code/shared'
 import { Icon } from '../common'
 import { IconButton, Kbd, StatusDot } from '../ui'
 import { goTo, switchAppMode } from './actions'
@@ -24,22 +24,22 @@ export function TitleBar() {
   const connected = useStudio((s) => s.connected)
   const modelId = useStudio(chatModelId)
   const loadingModelId = useStudio((s) => s.loadingModelId)
-  const workspace = useStudio((s) => {
-    const active = s.conversations.find((c) => c.id === s.activeConversationId)
-    return active?.mode === 'agent' ? (active.workspace ?? null) : null
-  })
+  const activeConversation = useStudio((s) => s.conversations.find((c) => c.id === s.activeConversationId) ?? null)
+  const workspace = activeConversation?.mode === 'agent' ? (activeConversation.workspace ?? null) : null
   const agentRun = useAgent((s) => s.run)
   const appMode = useUi((s) => s.appMode)
   const sidebarOpen = useUi((s) => s.sidebarOpen)
   const toggleSidebar = useUi((s) => s.toggleSidebar)
+  const bottomPanelOpen = useUi((s) => s.bottomPanelOpen)
+  const toggleBottomPanel = useUi((s) => s.toggleBottomPanel)
   const rightPanel = useUi((s) => s.rightPanel)
   const setQuickOpen = useUi((s) => s.setQuickOpen)
   const openPalette = useUi((s) => s.openPalette)
   const setModelsTab = useUi((s) => s.setModelsTab)
 
-  const defaultRight = appMode === 'code' ? 'session' : 'context'
-  const activeRight = effectivePanel(rightPanel, appMode)
-  const terminalActive = appMode === 'code' && activeRight === 'terminal' && view === 'chat'
+  const currentSide = paneSide(activeConversation, appMode)
+  const defaultRight = currentSide === 'code' ? 'session' : 'context'
+  const activeRight = effectivePanel(rightPanel, currentSide)
   const rightOpen = activeRight !== null && view === 'chat'
 
   const openModelSearch = () => {
@@ -168,14 +168,9 @@ export function TitleBar() {
         />
         <IconButton
           icon="panelBottom"
-          label="Toggle Terminal Panel"
-          active={terminalActive}
-          shortcut={SHORTCUTS.terminalPanel}
-          onClick={() => {
-            if (view !== 'chat') goTo('chat')
-            if (appMode !== 'code') switchAppMode('code')
-            togglePane('terminal', 'code')
-          }}
+          label={bottomPanelOpen ? 'Hide Bottom Panel' : 'Show Bottom Panel'}
+          active={bottomPanelOpen}
+          onClick={toggleBottomPanel}
           className="!size-[24px]"
         />
         <IconButton

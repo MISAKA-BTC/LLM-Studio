@@ -381,7 +381,7 @@ export type Settings = {
     startup_timeout_secs: number
   }
   image_backend: {
-    kind: 'none' | 'diffusion'
+    kind: 'none' | 'diffusion' | 'mock'
     python_path: string | null
     diffusion_server_path: string | null
     device: string | null
@@ -1101,4 +1101,16 @@ export interface PublishedPalwartView {
   index_path: string
   total_bytes: number
   registered: boolean
+}
+
+export type GitBranches = {
+  is_git: boolean
+  current: string | null
+  branches: string[]
+}
+
+export type GitWorktreeCreated = {
+  path: string
+  branch: string
+  status: GitStatus
 }

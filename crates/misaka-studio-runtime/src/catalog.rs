@@ -245,8 +245,11 @@ pub(crate) fn split_repo(id: &str) -> Option<(&str, &str)> {
 
 pub(crate) fn install_directory(root: &std::path::Path, repo: &str, variant: &str) -> Option<std::path::PathBuf> {
     let (author, name) = split_repo(repo)?;
-    let folder =
-        if variant == "mlx" { "mlx".into() } else { format!("gguf-{}", &hex::encode(Sha256::digest(variant.as_bytes()))[..16]) };
+    let folder = if variant == "mlx" || variant == "diffusers" {
+        variant.into()
+    } else {
+        format!("gguf-{}", &hex::encode(Sha256::digest(variant.as_bytes()))[..16])
+    };
     Some(root.join(author).join(name).join(folder))
 }
 
@@ -566,6 +569,79 @@ impl Catalog {
             url = next;
         }
         Err(Error::Catalog { message: "The repository file list exceeds 20 pages".into() })
+    }
+
+    /// Resolve a `diffusers` checkpoint repository (`model_index.json` + component weights/configs)
+    /// into a directory download variant.
+    pub async fn diffusers_repo(&self, repo_id: &str) -> Result<(CatalogRepo, CatalogVariant)> {
+        let (author, name) =
+            split_repo(repo_id).ok_or_else(|| Error::bad_request("Expected a Hugging Face repository in author/model form"))?;
+        let info_url = self.url(["api", "models", author, name, "revision", "main"])?;
+        let response = self
+            .authorized(self.http.get(info_url.clone()))
+            .send()
+            .await
+            .map_err(|e| Error::Catalog { message: format!("{info_url}: {e}") })?;
+        let response = check(response, info_url.as_str()).await?;
+        let info: RawRepoInfo = decode(response, info_url.as_str()).await?;
+        let pinned = info.sha.clone().ok_or_else(|| Error::bad_request("Hugging Face did not provide an immutable revision"))?;
+        let tree = self.tree(author, name, &pinned).await?;
+
+        let all_files: Vec<CatalogFile> = tree
+            .into_iter()
+            .filter(|e| e.kind.as_deref() != Some("directory"))
+            .filter(|e| e.path.split('/').all(safe_component))
+            .map(|e| CatalogFile {
+                size: e.lfs.as_ref().and_then(|l| l.size).or(e.size),
+                sha256: e.lfs.as_ref().and_then(|l| l.oid.clone()),
+                path: e.path,
+                quantization: None,
+            })
+            .collect();
+
+        if !all_files.iter().any(|f| f.path == "model_index.json") {
+            return Err(Error::bad_request(format!(
+                "{repo_id} has no model_index.json — choose a Hugging Face diffusers repository"
+            )));
+        }
+
+        let keep: Vec<CatalogFile> = all_files
+            .into_iter()
+            .filter(|f| {
+                let lower = f.path.to_ascii_lowercase();
+                lower == "model_index.json"
+                    || lower.ends_with(".safetensors")
+                    || lower.ends_with(".json")
+                    || lower.ends_with(".txt")
+                    || lower.ends_with(".model")
+            })
+            .collect();
+        if !keep.iter().any(|f| f.path.to_ascii_lowercase().ends_with(".safetensors")) {
+            return Err(Error::bad_request(format!("{repo_id} contains no .safetensors weights")));
+        }
+
+        let variant = CatalogVariant {
+            id: "diffusers".into(),
+            format: ModelFormat::Mlx,
+            label: "diffusers".into(),
+            size: total_size(&keep),
+            files: keep,
+        };
+        let entry = info.model.entry(repo_id.to_string());
+        let repo = CatalogRepo {
+            id: entry.id.clone(),
+            revision: Some(pinned),
+            gated: entry.gated,
+            base_model: entry.base_model.clone(),
+            architecture: entry.architecture.clone(),
+            parameters: entry.parameters,
+            context_length: None,
+            license: None,
+            variants: vec![variant.clone()],
+            entry,
+            files: Vec::new(),
+        };
+        Ok((repo, variant))
     }
 
     pub async fn readme(&self, repo_id: &str, revision: Option<&str>) -> Result<Option<String>> {

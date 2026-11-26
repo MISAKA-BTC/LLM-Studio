@@ -48,7 +48,7 @@ impl DiffusionBackend {
     pub fn new(python: Option<PathBuf>, script: Option<PathBuf>, device: Option<String>, startup_timeout: Duration) -> Self {
         DiffusionBackend {
             python: python.unwrap_or_else(|| PathBuf::from("python3")),
-            script: script.unwrap_or_else(|| PathBuf::from("sidecars/diffusion/server.py")),
+            script: script.unwrap_or_else(locate_default_sidecar),
             device,
             startup_timeout,
             running: Arc::new(RwLock::new(None)),
@@ -77,6 +77,28 @@ impl DiffusionBackend {
         let running = guard.as_ref().ok_or(Error::NoModelLoaded)?;
         Ok(format!("http://127.0.0.1:{}", running.port))
     }
+}
+
+fn locate_default_sidecar() -> PathBuf {
+    let rel = PathBuf::from("sidecars/diffusion/server.py");
+    if rel.is_file() {
+        return rel;
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for candidate in [
+            dir.join("sidecars/diffusion/server.py"),
+            dir.join("../Resources/sidecars/diffusion/server.py"),
+            dir.join("../../sidecars/diffusion/server.py"),
+            dir.join("../../../sidecars/diffusion/server.py"),
+        ] {
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    rel
 }
 
 fn free_port() -> Result<u16> {

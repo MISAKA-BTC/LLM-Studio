@@ -24,6 +24,7 @@ import { useSideSync } from './components/shell/sideSync'
 import { useGlobalShortcuts } from './components/shell/useGlobalShortcuts'
 import { RetainedView } from './components/shell/RetainedView'
 import { QuickOpen } from './components/shell/QuickOpen'
+import { BottomPanel } from './components/shell/BottomPanel'
 import { TitleBar } from './components/shell/TitleBar'
 import { useWorkbenchSync } from './components/shell/workbenchState'
 import { useCodeWatchers } from './components/code/watchers'
@@ -126,6 +127,7 @@ export default function App() {
             </Page>
           </ViewSlot>
         </main>
+        <BottomPanel />
         </div>
       </div>
       <StatusBar />

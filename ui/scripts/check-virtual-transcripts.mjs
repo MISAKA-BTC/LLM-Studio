@@ -32,6 +32,7 @@ export async function checkVirtualTranscripts({ act, check, change, flush, visib
   const measuredHeights = new Map()
   const observers = new Set()
   let deterministicGeometry = false
+  let simulatedWidth = 728
 
   try {
     await act(async () => {
@@ -134,7 +135,7 @@ export async function checkVirtualTranscripts({ act, check, change, flush, visib
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       if (deterministicGeometry && (this.dataset.virtualRow || this.hasAttribute('data-virtual-transcript'))) {
         const height = this.dataset.virtualRow ? measuredHeights.get(this.dataset.virtualRow) ?? 120 : Number.parseFloat(this.style.height || '0')
-        return { x: 0, y: 0, top: 0, left: 0, right: 728, bottom: height, width: 728, height, toJSON() {} }
+        return { x: 0, y: 0, top: 0, left: 0, right: simulatedWidth, bottom: height, width: simulatedWidth, height, toJSON() {} }
       }
       return previousRect.call(this)
     }
@@ -168,6 +169,82 @@ export async function checkVirtualTranscripts({ act, check, change, flush, visib
       await resize(last, 280)
       assert.equal(scroller.scrollTop, before + 160)
       assert.equal(scroller.scrollTop, scroller.scrollHeight - scroller.clientHeight)
+    })
+
+    await check('toggling side panels reflows collapsed-reasoning transcripts without blank gaps or anchor loss', async () => {
+      const longThinking = '思考プロセス '.repeat(2500)
+      const reasoningMessages = Array.from({ length: 40 }, (_, index) => ({
+        id: `reasoning-${index}`,
+        role: index % 2 ? 'assistant' : 'user',
+        content: index % 2 ? `<think>${longThinking}</think>\n了解しました。ステップ ${index} を確認します。` : `ステップ ${index} を進めて`,
+        reasoning: index % 2 ? longThinking : undefined,
+        reasoningMs: index % 2 ? 180_000 : undefined,
+        createdAt: index + 1,
+      }))
+      for (const message of reasoningMessages) measuredHeights.set(message.id, 150)
+      const reasoningThread = { ...thread, id: 'virtual-reasoning-resize', title: 'Reasoning resize fixture', mode: 'agent', messages: reasoningMessages }
+      await act(async () => {
+        useStudio.setState({ conversations: [...useStudio.getState().conversations, reasoningThread], activeConversationId: reasoningThread.id })
+      })
+      await settle()
+
+      // Scroll to middle (message ~20) so `following` is false.
+      await scrollTo(scroller.scrollHeight / 2)
+      const visibleBefore = rows().find((node) => {
+        const top = Number.parseFloat(node.style.top) + 24
+        return top <= scroller.scrollTop && top + 150 > scroller.scrollTop
+      })
+      assert.ok(visibleBefore, 'A visible anchor message straddles scrollTop before toggling the side panel')
+      const anchorId = visibleBefore.dataset.virtualRow
+      const offsetBefore = scroller.scrollTop - (Number.parseFloat(visibleBefore.style.top) + 24)
+
+      // Open right side panel -> column narrows from 728px to 520px and mounted rows wrap to 210px.
+      simulatedWidth = 520
+      for (const message of reasoningMessages) measuredHeights.set(message.id, 210)
+      await act(async () => {
+        useUi.getState().setRightPanel('session')
+        const listNode = list()
+        for (const observer of [...observers]) {
+          const targets = [...observer.nodes].filter((n) => n === listNode || n.dataset?.virtualRow)
+          if (targets.length) observer.callback(targets.map((target) => ({ target })))
+        }
+      })
+      await settle()
+
+      // Verify consecutive mounted rows have exact 210px spacing (zero thousands-of-pixels reasoning gap).
+      const narrowedRows = rows().sort((a, b) => Number(a.dataset.virtualIndex) - Number(b.dataset.virtualIndex))
+      assert.ok(narrowedRows.length >= 4)
+      for (let i = 1; i < narrowedRows.length; i++) {
+        if (Number(narrowedRows[i].dataset.virtualIndex) === Number(narrowedRows[i - 1].dataset.virtualIndex) + 1) {
+          const gap = Number.parseFloat(narrowedRows[i].style.top) - Number.parseFloat(narrowedRows[i - 1].style.top)
+          assert.equal(gap, 210, `Adjacent mounted rows must sit 210px apart without blank gaps, got ${gap}px`)
+        }
+      }
+      const afterNarrow = row(anchorId)
+      assert.ok(afterNarrow, 'Anchor message stays mounted in view after opening side panel')
+      assert.ok(Math.abs((scroller.scrollTop - (Number.parseFloat(afterNarrow.style.top) + 24)) - offsetBefore) <= 2, 'Anchor offset preserved on narrow')
+
+      // Close right side panel -> column widens back to 728px (150px rows) even if browser clamps scrollTop.
+      simulatedWidth = 728
+      for (const message of reasoningMessages) measuredHeights.set(message.id, 150)
+      await act(async () => {
+        useUi.getState().setRightPanel(null)
+        const listNode = list()
+        for (const observer of [...observers]) {
+          const targets = [...observer.nodes].filter((n) => n === listNode || n.dataset?.virtualRow)
+          if (targets.length) observer.callback(targets.map((target) => ({ target })))
+        }
+      })
+      await settle()
+      const afterWiden = row(anchorId)
+      assert.ok(afterWiden, 'Anchor message stays mounted in view after closing side panel')
+      const widenedRows = rows().sort((a, b) => Number(a.dataset.virtualIndex) - Number(b.dataset.virtualIndex))
+      for (let i = 1; i < widenedRows.length; i++) {
+        if (Number(widenedRows[i].dataset.virtualIndex) === Number(widenedRows[i - 1].dataset.virtualIndex) + 1) {
+          const gap = Number.parseFloat(widenedRows[i].style.top) - Number.parseFloat(widenedRows[i - 1].style.top)
+          assert.equal(gap, 150, `Adjacent mounted rows return to 150px spacing without blank gaps, got ${gap}px`)
+        }
+      }
     })
   } finally {
     deterministicGeometry = false

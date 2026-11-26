@@ -10,7 +10,7 @@ use crate::backend::diffusion::DiffusionBackend;
 use crate::backend::llamacpp::{LlamaCppBackend, accelerator_tag};
 use crate::backend::misaka::MisakaBackend;
 use crate::backend::mlx::MlxBackend;
-use crate::backend::mock::{MockBackend, NoneImageBackend};
+use crate::backend::mock::{MockBackend, MockImageBackend, NoneImageBackend};
 use crate::backend::{
     ChatMessage, GenerationRequest, ImageDtype, ImageLoadRequest, LoadRequest, LoadedImageModel, LoadedModel, SharedBackend,
     SharedImageBackend, StreamEvent, Txt2ImgRequest, Usage,
@@ -349,8 +349,12 @@ impl AppState {
     /// carries: one load at a time, and loading replaces whatever was loaded.
     pub async fn load_image_model(&self, id: &str, dtype: ImageDtype) -> Result<ImageRuntimeStatus> {
         let _permit = self.image_load_lock.lock().await;
-        let model = self.store.require_image(id).await?;
         let backend = self.image_backend().await;
+        let model = if id == "mock-preview" && backend.name() == "mock" {
+            Self::mock_preview_image_model()
+        } else {
+            self.store.require_image(id).await?
+        };
 
         let availability = backend.availability().await;
         if let crate::backend::Availability::Unavailable { reason, remedy } = availability {
@@ -376,6 +380,20 @@ impl AppState {
         })
     }
 
+    pub fn mock_preview_image_model() -> LocalImageModel {
+        LocalImageModel {
+            id: "mock-preview".into(),
+            name: "Mock Preview (built-in)".into(),
+            path: PathBuf::from("mock-preview"),
+            size_bytes: 0,
+            architecture: Some("MockDiffusionPipeline".into()),
+            supports_reference_images: true,
+            source: misaka_studio_core::model::ModelSource::default(),
+            sha256: None,
+            modified_at: None,
+        }
+    }
+
     pub async fn unload_image_model(&self) -> Result<()> {
         let _permit = self.image_load_lock.lock().await;
         self.image_backend().await.unload().await?;
@@ -394,7 +412,7 @@ impl AppState {
     pub async fn image_backend_status(&self) -> Vec<(String, bool, crate::backend::Availability)> {
         let selected = self.image_backend().await;
         let mut out = Vec::new();
-        for kind in [ImageBackendKind::Diffusion, ImageBackendKind::None] {
+        for kind in [ImageBackendKind::Diffusion, ImageBackendKind::Mock, ImageBackendKind::None] {
             let settings = self.settings.read().await.clone();
             let probe = build_image_backend_kind(kind, &settings);
             out.push((probe.name().to_string(), probe.name() == selected.name(), probe.availability().await));
@@ -1318,6 +1336,7 @@ pub fn build_image_backend(settings: &Settings) -> SharedImageBackend {
 pub fn build_image_backend_kind(kind: ImageBackendKind, settings: &Settings) -> SharedImageBackend {
     match kind {
         ImageBackendKind::None => Arc::new(NoneImageBackend),
+        ImageBackendKind::Mock => Arc::new(MockImageBackend::default()),
         ImageBackendKind::Diffusion => Arc::new(DiffusionBackend::new(
             settings.image_backend.python_path.clone(),
             settings.image_backend.diffusion_server_path.clone(),

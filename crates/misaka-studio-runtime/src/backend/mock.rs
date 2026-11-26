@@ -235,6 +235,148 @@ impl ImageBackend for NoneImageBackend {
     }
 }
 
+/// Built-in preview image backend so the Image Studio UI works out of the box without Python or weights.
+#[derive(Default)]
+pub struct MockImageBackend {
+    loaded: Mutex<Option<LoadedImageModel>>,
+}
+
+impl ImageBackend for MockImageBackend {
+    fn name(&self) -> &'static str {
+        "mock"
+    }
+
+    fn availability(&self) -> BoxFuture<'_, Availability> {
+        Box::pin(async { Availability::Available { detail: "built in; generates deterministic preview PNGs".into() } })
+    }
+
+    fn load(&self, request: ImageLoadRequest) -> BoxFuture<'_, Result<LoadedImageModel>> {
+        Box::pin(async move {
+            let loaded = LoadedImageModel { model_id: request.model_id, load_ms: 1 };
+            *self.loaded.lock().expect("mock image lock") = Some(loaded.clone());
+            Ok(loaded)
+        })
+    }
+
+    fn unload(&self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async {
+            *self.loaded.lock().expect("mock image lock") = None;
+            Ok(())
+        })
+    }
+
+    fn loaded(&self) -> BoxFuture<'_, Option<LoadedImageModel>> {
+        Box::pin(async { self.loaded.lock().expect("mock image lock").clone() })
+    }
+
+    fn generate(&self, request: Txt2ImgRequest) -> BoxFuture<'_, Result<Vec<GeneratedImage>>> {
+        Box::pin(async move {
+            let width = request.width.clamp(64, 1536);
+            let height = request.height.clamp(64, 1536);
+            let count = request.n.clamp(1, 4);
+            let base_seed = request.seed.unwrap_or_else(|| {
+                request.prompt.bytes().fold(0x9e37_79b9_7f4a_7c15u64, |acc, b| acc.wrapping_mul(1099511628211).wrapping_add(b as u64))
+            });
+            let mut out = Vec::with_capacity(count as usize);
+            for idx in 0..count {
+                let png_bytes = render_mock_png(width, height, base_seed.wrapping_add(idx as u64 * 7919), request.reference_images.len());
+                out.push(GeneratedImage { png_bytes });
+            }
+            Ok(out)
+        })
+    }
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let start = out.len();
+    out.extend_from_slice(tag);
+    out.extend_from_slice(data);
+    let checksum = crc32(&out[start..]);
+    out.extend_from_slice(&checksum.to_be_bytes());
+}
+
+fn render_mock_png(width: u32, height: u32, seed: u64, refs: usize) -> Vec<u8> {
+    // Render at compact preview resolution so uncompressed PNG stays fast and lightweight (~180 KB).
+    let w = width.min(384);
+    let h = height.min(384);
+    let r0 = ((seed & 0xff) as u8).max(28);
+    let g0 = (((seed >> 8) & 0xff) as u8).max(36);
+    let b0 = (((seed >> 16) & 0xff) as u8).max(64);
+    let r1 = (((seed >> 24) & 0xff) as u8).max(48);
+    let g1 = (((seed >> 32) & 0xff) as u8).max(96);
+    let b1 = (((seed >> 40) & 0xff) as u8).max(140);
+
+    let row_bytes = 1 + (w as usize) * 3;
+    let mut raw = Vec::with_capacity(row_bytes * h as usize);
+    for y in 0..h {
+        raw.push(0); // filter type 0 (None)
+        let ty = y as f32 / (h.max(1) as f32);
+        for x in 0..w {
+            let tx = x as f32 / (w.max(1) as f32);
+            let wave = (((x.wrapping_mul(7) ^ y.wrapping_mul(13)) & 31) as f32) / 255.0;
+            let mix = (tx * 0.55 + ty * 0.45).clamp(0.0, 1.0);
+            let mut r = (r0 as f32 * (1.0 - mix) + r1 as f32 * mix + wave * 24.0).clamp(0.0, 255.0) as u8;
+            let mut g = (g0 as f32 * (1.0 - mix) + g1 as f32 * mix + wave * 18.0).clamp(0.0, 255.0) as u8;
+            let mut b = (b0 as f32 * (1.0 - mix) + b1 as f32 * mix + wave * 28.0).clamp(0.0, 255.0) as u8;
+            // Subtle framing grid + badge accent when reference images are attached.
+            if x == 12 || x + 13 == w || y == 12 || y + 13 == h {
+                r = r.saturating_add(45);
+                g = g.saturating_add(45);
+                b = b.saturating_add(55);
+            } else if refs > 0 && x >= 20 && x < 20 + (refs.min(6) as u32) * 14 && y >= 20 && y < 30 && (x - 20) % 14 < 10 {
+                r = 245;
+                g = 200;
+                b = 90;
+            }
+            raw.extend_from_slice(&[r, g, b]);
+        }
+    }
+
+    // Wrap `raw` in valid zlib + stored deflate blocks (65535 bytes max per block).
+    let mut zlib = Vec::with_capacity(raw.len() + (raw.len() / 65535 + 2) * 5 + 6);
+    zlib.extend_from_slice(&[0x78, 0x01]);
+    let chunks: Vec<&[u8]> = if raw.is_empty() { vec![&[]] } else { raw.chunks(65_535).collect() };
+    for (i, block) in chunks.iter().enumerate() {
+        let last = i + 1 == chunks.len();
+        zlib.push(u8::from(last));
+        let len = block.len() as u16;
+        zlib.extend_from_slice(&len.to_le_bytes());
+        zlib.extend_from_slice(&(!len).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    let mut s1 = 1u32;
+    let mut s2 = 0u32;
+    for &byte in &raw {
+        s1 = (s1 + byte as u32) % 65_521;
+        s2 = (s2 + s1) % 65_521;
+    }
+    zlib.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+
+    let mut png = Vec::with_capacity(zlib.len() + 64);
+    png.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&w.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&h.to_be_bytes());
+    ihdr[8] = 8; // 8-bit depth
+    ihdr[9] = 2; // RGB truecolor
+    png_chunk(&mut png, b"IHDR", &ihdr);
+    png_chunk(&mut png, b"IDAT", &zlib);
+    png_chunk(&mut png, b"IEND", &[]);
+    png
+}
+
 /// Turn a task that sends into a channel into a stream.
 ///
 /// A small helper rather than a dependency on `async-stream`: the whole need is "spawn a producer,

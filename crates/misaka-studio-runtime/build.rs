@@ -19,5 +19,7 @@ fn main() {
     // watches what it is told to watch, and the default (the whole crate directory) does not
     // reach a sibling directory two levels up.
     println!("cargo:rerun-if-changed={}", dist.display());
+    println!("cargo:rerun-if-changed={}", dist.join("index.html").display());
+    println!("cargo:rerun-if-changed={}", dist.join("assets").display());
     println!("cargo:rerun-if-changed=build.rs");
 }

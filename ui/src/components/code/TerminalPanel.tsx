@@ -90,7 +90,7 @@ function Outcome({ block }: { block: TerminalBlock }) {
   }
 }
 
-function BlockActions({ block, folder, conversationId }: { block: TerminalBlock; folder: string; conversationId: string }) {
+function BlockActions({ block, folder, conversationId }: { block: TerminalBlock; folder: string; conversationId: string | null }) {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
@@ -108,7 +108,7 @@ function BlockActions({ block, folder, conversationId }: { block: TerminalBlock;
   }
   const send = () => {
     const attachment = terminalAttachment(summary(block, folder))
-    useComposer.getState().addAttachments(draftKey(conversationId), [attachment])
+    useComposer.getState().addAttachments(draftKey(conversationId, useUi.getState().appMode), [attachment])
     useUi.getState().focusComposer()
     useStudio.getState().toast('success', `Attached the output of “${block.command.length > 48 ? `${block.command.slice(0, 47)}…` : block.command}” to your message`)
   }
@@ -125,7 +125,7 @@ function BlockActions({ block, folder, conversationId }: { block: TerminalBlock;
   )
 }
 
-const Block = memo(function Block({ block, folder, conversationId }: { block: TerminalBlock; folder: string; conversationId: string }) {
+const Block = memo(function Block({ block, folder, conversationId }: { block: TerminalBlock; folder: string; conversationId: string | null }) {
   const note = droppedNote(block.output)
   const hasOutput = block.output.segments.length > 0
   return (
@@ -163,7 +163,17 @@ const Block = memo(function Block({ block, folder, conversationId }: { block: Te
   )
 })
 
-function Terminal({ root, conversationId }: { root: string; conversationId: string }) {
+export function Terminal({
+  root,
+  conversationId,
+  idPrefix = 'terminal-input',
+  hideHeader = false,
+}: {
+  root: string
+  conversationId: string | null
+  idPrefix?: string
+  hideHeader?: boolean
+}) {
   const session = useTerminal(root)
   const history = useTerminalHistory(root)
   const os = useStudio((s) => s.system?.hardware.os ?? null)
@@ -271,29 +281,33 @@ function Terminal({ root, conversationId }: { root: string; conversationId: stri
 
   const prompt = promptLabel(folder, session.cwd)
 
+  const inputId = `${idPrefix}-${conversationId ?? 'workbench'}`
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-ink-200 px-3 text-[0.7rem] dark:border-ink-800">
-        <Icon name="terminal" className="size-3.5 shrink-0 text-ink-400" />
-        <span className="mono min-w-0 flex-1 truncate text-ink-600 dark:text-ink-300" title={`${root}${session.cwd ? `/${session.cwd}` : ''}`}>
-          {prompt}
-        </span>
-        {running && !runningLocal && (
-          <button type="button" className="btn-outline h-6 gap-1 px-2 py-0 text-[0.7rem]" onClick={() => stopCommand(root)} title="Stop the command (Ctrl+C)">
-            <Icon name="stop" className="size-3" />
-            Stop
+      {!hideHeader && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-ink-200 px-3 text-[0.7rem] dark:border-ink-800">
+          <Icon name="terminal" className="size-3.5 shrink-0 text-ink-400" />
+          <span className="mono min-w-0 flex-1 truncate text-ink-600 dark:text-ink-300" title={`${root}${session.cwd ? `/${session.cwd}` : ''}`}>
+            {prompt}
+          </span>
+          {running && !runningLocal && (
+            <button type="button" className="btn-outline h-6 gap-1 px-2 py-0 text-[0.7rem]" onClick={() => stopCommand(root)} title="Stop the command (Ctrl+C)">
+              <Icon name="stop" className="size-3" />
+              Stop
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn-ghost h-6 px-2 py-0 text-[0.7rem]"
+            onClick={() => clearTerminal(root)}
+            disabled={session.blocks.length === 0 || (running && session.blocks.length === 1)}
+            title="Clear the scrollback (Ctrl+L)"
+          >
+            Clear
           </button>
-        )}
-        <button
-          type="button"
-          className="btn-ghost h-6 px-2 py-0 text-[0.7rem]"
-          onClick={() => clearTerminal(root)}
-          disabled={session.blocks.length === 0 || (running && session.blocks.length === 1)}
-          title="Clear the scrollback (Ctrl+L)"
-        >
-          Clear
-        </button>
-      </div>
+        </div>
+      )}
 
       <div ref={scrollRef} onScroll={onScroll} onMouseUp={focusPrompt} className="mono min-h-0 flex-1 overflow-y-auto text-[0.75rem] leading-[1.15rem]" role="log" aria-label="Terminal output" aria-live="off">
         {session.blocks.length === 0 ? (
@@ -315,11 +329,11 @@ function Terminal({ root, conversationId }: { root: string; conversationId: stri
       </div>
 
       <div className="flex shrink-0 items-center gap-2 border-t border-ink-200 px-3 py-2 dark:border-ink-800">
-        <label htmlFor={`terminal-input-${conversationId}`} className="mono max-w-[45%] shrink-0 truncate text-[0.75rem] text-ink-400 dark:text-ink-500" title={prompt}>
+        <label htmlFor={inputId} className="mono max-w-[45%] shrink-0 truncate text-[0.75rem] text-ink-400 dark:text-ink-500" title={prompt}>
           {shortPrompt(folder, session.cwd)} $
         </label>
         <input
-          id={`terminal-input-${conversationId}`}
+          id={inputId}
           ref={inputRef}
           className="mono min-w-0 flex-1 bg-transparent text-[0.75rem] text-ink-900 outline-none placeholder:text-ink-300 dark:text-ink-50 dark:placeholder:text-ink-600"
           value={input}

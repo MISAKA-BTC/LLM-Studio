@@ -1019,3 +1019,151 @@ mod tests {
         assert!(one_long_line.is_empty());
     }
 }
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub struct GitBranches {
+    pub is_git: bool,
+    pub current: Option<String>,
+    pub branches: Vec<String>,
+}
+
+/// Local branches of the repository containing `workspace`, most recently committed first.
+pub async fn branches(workspace: &Workspace) -> Result<GitBranches> {
+    let _operation = GIT_OPERATIONS.acquire().await.map_err(|_| Error::Cancelled)?;
+    let Ok(git) = Git::find(workspace) else {
+        return Ok(GitBranches::default());
+    };
+    let head = git.run(&["rev-parse", "--is-inside-work-tree", "--abbrev-ref", "HEAD"], 64 * 1024).await?;
+    if !head.ok() {
+        return if head.not_a_repository() { Ok(GitBranches::default()) } else { Err(head.failure("rev-parse")) };
+    }
+    let head_text = String::from_utf8_lossy(&head.stdout);
+    let mut lines = head_text.lines();
+    if lines.next() != Some("true") {
+        return Ok(GitBranches::default());
+    }
+    let current = lines.next().map(str::trim).filter(|b| !b.is_empty() && *b != "HEAD").map(str::to_string);
+
+    let refs = git.run(&["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads/"], 512 * 1024).await?;
+    if !refs.ok() {
+        return Err(refs.failure("for-each-ref"));
+    }
+    let mut list: Vec<String> =
+        String::from_utf8_lossy(&refs.stdout).lines().map(str::trim).filter(|b| !b.is_empty()).map(str::to_string).collect();
+    if let Some(ref cur) = current
+        && !list.iter().any(|b| b == cur)
+    {
+        list.insert(0, cur.clone());
+    }
+    Ok(GitBranches { is_git: true, current, branches: list })
+}
+
+/// Switch (or create and switch) a local branch in `workspace`, then return updated [`GitStatus`].
+pub async fn checkout(workspace: &Workspace, branch: &str, create: bool) -> Result<GitStatus> {
+    let name = branch.trim();
+    if name.is_empty() || name.starts_with('-') || name.contains("..") || name.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(bad("Invalid git branch name"));
+    }
+    let git = Git::find(workspace)?;
+    let check = git.run(&["check-ref-format", "--branch", name], 16 * 1024).await?;
+    if !check.ok() {
+        return Err(bad(format!("'{name}' is not a valid git branch name")));
+    }
+
+    // Checkout updates the index/worktree, so it must run without `GIT_OPTIONAL_LOCKS=0`.
+    let _operation = GIT_OPERATIONS.acquire().await.map_err(|_| Error::Cancelled)?;
+    let _permit = GIT_PROCESSES.acquire().await.map_err(|_| Error::Cancelled)?;
+    let mut cmd = tokio::process::Command::new(&git.binary);
+    cmd.arg("-C").arg(&git.root);
+    for setting in GIT_CONFIG {
+        cmd.arg("-c").arg(setting);
+    }
+    if create {
+        cmd.args(["checkout", "-b", name, "--"]);
+    } else {
+        cmd.args(["checkout", name, "--"]);
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    for &(key, value) in GIT_ENV {
+        if key != "GIT_OPTIONAL_LOCKS" {
+            cmd.env(key, value);
+        }
+    }
+    for key in GIT_ENV_CLEARED {
+        cmd.env_remove(key);
+    }
+    detach(&mut cmd);
+    let output = tokio::time::timeout(GIT_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| bad(format!("git checkout did not finish within {} seconds", GIT_TIMEOUT.as_secs())))?
+        .map_err(|e| bad(format!("could not run git checkout: {e}")))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(bad(if detail.is_empty() { format!("git checkout {name} failed") } else { detail }));
+    }
+    drop(_permit);
+    drop(_operation);
+    status_with_counts(workspace, false).await
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct GitWorktreeCreated {
+    pub path: String,
+    pub branch: String,
+    pub status: GitStatus,
+}
+
+/// Create a fresh git worktree beside the repository so the user's current checkout stays untouched.
+pub async fn create_worktree(workspace: &Workspace) -> Result<GitWorktreeCreated> {
+    let git = Git::find(workspace)?;
+    let top = git.run(&["rev-parse", "--show-toplevel"], 16 * 1024).await?;
+    if !top.ok() {
+        return Err(top.failure("rev-parse"));
+    }
+    let repo_root = PathBuf::from(String::from_utf8_lossy(&top.stdout).trim());
+    let repo_name = repo_root.file_name().and_then(|n| n.to_str()).unwrap_or("project");
+    let parent = repo_root.parent().ok_or_else(|| bad("Cannot create a worktree next to filesystem root"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| format!("{:x}", d.as_secs() & 0xffff_ffff))
+        .unwrap_or_else(|_| "wt".into());
+    let branch = format!("worktree/{stamp}");
+    let worktree_dir = parent.join(".misaka-worktrees").join(format!("{repo_name}-{stamp}"));
+    if let Some( container ) = worktree_dir.parent() {
+        std::fs::create_dir_all(container).map_err(|e| bad(format!("could not create {}: {e}", display_path(container))))?;
+    }
+
+    let _operation = GIT_OPERATIONS.acquire().await.map_err(|_| Error::Cancelled)?;
+    let _permit = GIT_PROCESSES.acquire().await.map_err(|_| Error::Cancelled)?;
+    let mut cmd = tokio::process::Command::new(&git.binary);
+    cmd.arg("-C").arg(&repo_root);
+    for setting in GIT_CONFIG {
+        cmd.arg("-c").arg(setting);
+    }
+    cmd.arg("worktree").arg("add").arg("-b").arg(&branch).arg(&worktree_dir);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    for &(key, value) in GIT_ENV {
+        if key != "GIT_OPTIONAL_LOCKS" {
+            cmd.env(key, value);
+        }
+    }
+    for key in GIT_ENV_CLEARED {
+        cmd.env_remove(key);
+    }
+    detach(&mut cmd);
+    let output = tokio::time::timeout(GIT_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| bad(format!("git worktree add did not finish within {} seconds", GIT_TIMEOUT.as_secs())))?
+        .map_err(|e| bad(format!("could not run git worktree add: {e}")))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(bad(if detail.is_empty() { "git worktree add failed".into() } else { detail }));
+    }
+    drop(_permit);
+    drop(_operation);
+
+    let path_str = worktree_dir.to_string_lossy().into_owned();
+    let opened = Workspace::open(&path_str)?;
+    let status = status_with_counts(&opened, false).await?;
+    Ok(GitWorktreeCreated { path: path_str, branch, status })
+}

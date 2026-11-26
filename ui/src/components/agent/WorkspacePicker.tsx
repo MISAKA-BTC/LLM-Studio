@@ -1,132 +1,79 @@
-// The folder picker: where an agent thread works.
+// Antigravity-style "Create Project" dialog — Drop-first + Native OS Folder Picker.
 //
-// Pick a recent folder, type or paste a path, browse the runtime's filesystem, or drop a folder
-// into the desktop window. Choosing asks the runtime to open the
-// folder first, so a path that does not exist or cannot be read is refused here, in the dialog,
-// rather than at the agent's first step.
-//
-// A thread's Changes are paths inside its folder, so a thread that already changed files is not
-// moved to another folder without saying so: a later Revert would otherwise write one project's
-// file into another.
+// Zero overwhelming in-app filesystem trees: users either drag & drop a folder directly
+// onto the drop card or click "+ Add Folder" to choose via Finder's native OS dialog.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useState } from 'react'
 import { api } from '../../lib/api'
 import { useAgent } from '../../lib/agent/run'
-import { folderName, rememberWorkspace, tildePath } from '../../lib/agent/workspace'
-import { hasNativeFileDrop, useFileDrop } from '../../lib/fileDrop'
-import type { BrowseView } from '../../lib/types'
+import { folderName, rememberWorkspace } from '../../lib/agent/workspace'
+import { useFileDrop } from '../../lib/fileDrop'
 import { useStudio } from '../../store/studio'
 import { useUi } from '../../store/ui'
 import { Icon, Spinner } from '../common'
 import { Modal } from '../ui'
 
-function crumbs(path: string): { label: string; path: string }[] {
-  const windows = /^[A-Za-z]:[\\/]/.test(path)
-  const separator = windows ? '\\' : '/'
-  const parts = path.split(/[\\/]/).filter(Boolean)
-  const out: { label: string; path: string }[] = []
-  if (!windows) out.push({ label: '/', path: '/' })
-  parts.forEach((part, index) => {
-    const joined = parts.slice(0, index + 1).join(separator)
-    out.push({ label: part, path: windows ? (index === 0 ? `${joined}${separator}` : joined) : `/${joined}` })
-  })
-  return out
+function parentDirectory(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  if (idx <= 0) return null
+  return trimmed.slice(0, idx)
 }
 
 function PickerBody({ conversationId, onClose }: { conversationId: string | null; onClose: () => void }) {
   const conversation = useStudio((s) => (conversationId ? (s.conversations.find((c) => c.id === conversationId) ?? null) : null))
-  const recent = useUi((s) => s.recentWorkspaces)
-  const removeRecent = useUi((s) => s.removeRecentWorkspace)
   const runHere = useAgent((s) => s.run !== null && s.run.conversationId === conversationId)
-  const [input, setInput] = useState(conversation?.workspace ?? '')
-  const [view, setView] = useState<BrowseView | null>(null)
-  const [browseError, setBrowseError] = useState<string | null>(null)
-  const [browsing, setBrowsing] = useState(false)
-  const [hidden, setHidden] = useState(false)
+
+  const [tab, setTab] = useState<'local' | 'remote'>('local')
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(conversation?.workspace ?? null)
+  const [remotePath, setRemotePath] = useState('')
+  const [pickingNative, setPickingNative] = useState(false)
   const [opening, setOpening] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   const [confirmMove, setConfirmMove] = useState<string | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
-  const browseRequest = useRef(0)
-  const home = view?.home ?? null
-
-  const browse = async (path: string | null, showHidden = hidden) => {
-    const request = ++browseRequest.current
-    setBrowsing(true)
-    setBrowseError(null)
-    try {
-      const next = await api.workspace.browse(path, showHidden)
-      if (request === browseRequest.current) setView(next)
-    } catch (error) {
-      if (request === browseRequest.current) setBrowseError((error as Error).message)
-    } finally {
-      if (request === browseRequest.current) setBrowsing(false)
-    }
-  }
-
-  const { dragging, dropHandlers, dropRef } = useFileDrop({
-    kind: 'folder',
-    onPaths: (paths) => {
-      if (opening) return
-      if (paths.length === 0) {
-        setOpenError('Paste the folder path here, or drop the folder in the desktop app.')
-        return
-      }
-      const [path] = paths
-      if (paths.length !== 1 || !path) {
-        setOpenError('Drop one folder to select it.')
-        return
-      }
-      setConfirmMove(null)
-      setOpenError(null)
-      setInput(path)
-      setView(null)
-      void browse(path)
-    },
-  })
-
-  useEffect(() => {
-    // Start where the thread already is, else beside the last folder used, else at home.
-    const start = conversation?.workspace ?? recent[0] ?? null
-    const parent = start && start !== conversation?.workspace ? start.replace(/[\\/][^\\/]+[\\/]?$/, '') || null : start
-    void browse(parent)
-    inputRef.current?.focus()
-    // Once, when the dialog opens: the dialog is remounted for each thread it is opened for.
-  }, [])
 
   const choose = async (raw: string, confirmed = false) => {
     const path = raw.trim()
     if (!path || opening) return
     if (runHere) {
-      setOpenError('The agent is working in this thread. Stop it before moving the thread to another folder.')
+      setOpenError('The agent is currently running in this thread. Stop it before changing folders.')
       return
     }
     setOpening(path)
     setOpenError(null)
     try {
-      const info = await api.workspace.open(path)
+      let info
+      try {
+        info = await api.workspace.open(path)
+      } catch (err) {
+        // If the user dropped a file inside a project folder, open its parent folder automatically!
+        const parent = parentDirectory(path)
+        if (!parent) throw err
+        info = await api.workspace.open(parent)
+      }
       const studio = useStudio.getState()
+      const ui = useUi.getState()
       const thread = conversationId ? studio.conversations.find((c) => c.id === conversationId) : undefined
       if (thread && (thread.changes?.length ?? 0) > 0 && thread.workspace && thread.workspace !== info.root && !confirmed) {
         setConfirmMove(info.root)
         return
       }
       rememberWorkspace(info)
+      ui.setNoProject(false)
+      if (ui.appMode !== 'code') ui.setAppMode('code')
       if (thread) {
         if ((thread.mode ?? 'chat') !== 'agent') studio.setConversationMode(thread.id, 'agent')
         if (thread.workspace !== info.root) {
           studio.setConversationWorkspace(thread.id, info.root)
-          // The old folder's changes cannot be reverted from the new one.
           if (thread.workspace) studio.updateConversation(thread.id, { changes: [] })
         }
       } else {
         studio.newConversation({ mode: 'agent', workspace: info.root })
       }
-      useUi.getState().addRecentWorkspace(info.root)
+      ui.addRecentWorkspace(info.root)
       studio.setView('chat')
       onClose()
-      useUi.getState().focusComposer()
+      ui.focusComposer()
     } catch (error) {
       setOpenError((error as Error).message)
     } finally {
@@ -134,264 +81,245 @@ function PickerBody({ conversationId, onClose }: { conversationId: string | null
     }
   }
 
-  const trail = useMemo(() => (view ? crumbs(view.path) : []), [view])
-  const folders = view?.entries.filter((e) => e.is_dir) ?? []
+  const { dragging, dropHandlers, dropRef } = useFileDrop({
+    kind: 'folder',
+    onPaths: (paths) => {
+      if (opening) return
+      const valid = paths.filter((p): p is string => Boolean(p && p.trim()))
+      if (valid.length === 0) {
+        setOpenError('Drop a folder from Finder in the desktop app, or click "+ Add Folder".')
+        return
+      }
+      setConfirmMove(null)
+      setOpenError(null)
+      void choose(valid[0]!)
+    },
+  })
 
-  const focusList = (delta: number) => {
-    const buttons = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>('button[data-entry]') ?? [])
-    if (!buttons.length) return
-    const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
-    const next = index === -1 ? (delta > 0 ? 0 : buttons.length - 1) : Math.min(buttons.length - 1, Math.max(0, index + delta))
-    buttons[next]?.focus()
+  const handleNativePick = async () => {
+    if (pickingNative || opening) return
+    setPickingNative(true)
+    setOpenError(null)
+    try {
+      const { path } = await api.workspace.pickFolder()
+      if (path) {
+        setSelectedFolder(path)
+        await choose(path)
+      }
+    } catch (error) {
+      setOpenError((error as Error).message)
+    } finally {
+      setPickingNative(false)
+    }
+  }
+
+  const handleSkip = () => {
+    const ui = useUi.getState()
+    const studio = useStudio.getState()
+    ui.setNoProject(true)
+    if (conversation && conversation.messages.length === 0) {
+      studio.setConversationWorkspace(conversation.id, null)
+      studio.setConversationMode(conversation.id, 'chat')
+      ui.setAppMode('chat')
+    }
+    onClose()
+    ui.focusComposer()
   }
 
   return (
-    <div ref={dropRef} className="relative flex max-h-[min(40rem,85vh)] flex-col" {...dropHandlers}>
-      <div className="flex items-start gap-3 px-4 pb-3 pt-4">
-        <div className="rounded-lg bg-arc-500/10 p-2 text-arc-600 dark:text-arc-400">
-          <Icon name="folderOpen" className="size-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-ink-900 dark:text-ink-50">Open a folder</h2>
-          <p className="mt-0.5 text-xs text-ink-500 dark:text-ink-400">The agent reads, edits and runs commands inside this folder only.</p>
-        </div>
-        <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+    <div ref={dropRef} className="relative flex flex-col p-5 select-none" {...dropHandlers}>
+      {/* Header: Create Project + circular close button */}
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[17px] font-semibold tracking-tight text-ink-900 dark:text-white">Create Project</h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="inline-flex size-8 items-center justify-center rounded-full border border-ink-200 text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-900 focus-visible:outline-2 focus-visible:outline-arc-500 dark:border-[#323236] dark:text-[#a1a1aa] dark:hover:bg-[#27272a] dark:hover:text-white"
+        >
           <Icon name="x" className="size-4" />
         </button>
       </div>
 
-      <form
-        className="flex gap-2 px-4"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void choose(input)
-        }}
+      {/* Segmented Mode Bar: This Computer | Remote */}
+      <div
+        className="mt-4 grid grid-cols-2 rounded-full border border-ink-200 bg-ink-100/80 p-1 dark:border-[#2a2a2e] dark:bg-[#141417]"
+        role="tablist"
+        aria-label="Project location"
       >
-        <div className="relative min-w-0 flex-1">
-          <Icon name="folder" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-ink-400" />
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'local'}
+          onClick={() => setTab('local')}
+          className={`inline-flex h-8 items-center justify-center gap-2 rounded-full text-[13px] font-medium transition-colors ${
+            tab === 'local'
+              ? 'border border-ink-300/80 bg-white text-ink-900 shadow-xs dark:border-[#38383d] dark:bg-[#242429] dark:text-white'
+              : 'text-ink-500 hover:text-ink-900 dark:text-[#a1a1aa] dark:hover:text-white'
+          }`}
+        >
+          <Icon name="monitor" className="size-3.5" />
+          <span>This Computer</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'remote'}
+          onClick={() => setTab('remote')}
+          className={`inline-flex h-8 items-center justify-center gap-2 rounded-full text-[13px] font-medium transition-colors ${
+            tab === 'remote'
+              ? 'border border-ink-300/80 bg-white text-ink-900 shadow-xs dark:border-[#38383d] dark:bg-[#242429] dark:text-white'
+              : 'text-ink-500 hover:text-ink-900 dark:text-[#a1a1aa] dark:hover:text-white'
+          }`}
+        >
+          <Icon name="cloud" className="size-3.5" />
+          <span>Remote</span>
+        </button>
+      </div>
+
+      {tab === 'local' ? (
+        <div className="mt-4">
+          <div className="text-[13px] font-medium text-ink-600 dark:text-[#a1a1aa]">Select Folder(s)</div>
+
+          {/* Drop Zone */}
+          <div
+            className={`mt-2.5 flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-6 text-center transition-colors ${
+              dragging
+                ? 'border-arc-500 bg-arc-500/10 text-arc-600 dark:text-arc-300'
+                : 'border-ink-300 bg-ink-50/50 text-ink-500 dark:border-[#323238] dark:bg-[#141417] dark:text-[#a1a1aa]'
+            }`}
+          >
+            <div className="rounded-lg border border-ink-200 bg-white p-2 text-ink-500 dark:border-[#2e2e34] dark:bg-[#202024] dark:text-[#d4d4d8]">
+              {opening ? <Spinner className="size-5 text-arc-500" /> : <Icon name="upload" className="size-5" />}
+            </div>
+            <div className="text-[13px] font-medium text-ink-800 dark:text-[#e4e4e7]">
+              フォルダをここにドラッグ＆ドロップ
+            </div>
+            <div className="text-[11.5px] text-ink-500 dark:text-[#71717a]">
+              Finder からプロジェクトのフォルダ（または中のファイル）をそのままドロップできます
+            </div>
+          </div>
+
+          {selectedFolder && (
+            <div className="mt-2.5 flex items-center justify-between gap-2 rounded-xl border border-ink-200 bg-ink-50 px-3.5 py-2 text-[13px] dark:border-[#2e2e34] dark:bg-[#202024]">
+              <div className="flex min-w-0 items-center gap-2">
+                <Icon name="folder" className="size-4 shrink-0 text-arc-500" />
+                <span className="font-medium text-ink-900 dark:text-white">{folderName(selectedFolder)}</span>
+                <span className="mono truncate text-xs text-ink-400">{selectedFolder}</span>
+              </div>
+              <button
+                type="button"
+                aria-label="Clear selected folder"
+                onClick={() => setSelectedFolder(null)}
+                className="icon-btn size-6"
+              >
+                <Icon name="x" className="size-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* + Add Folder button (launches native macOS Finder folder chooser) */}
+          <button
+            type="button"
+            disabled={pickingNative || opening !== null}
+            onClick={() => void handleNativePick()}
+            className="mt-2.5 flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-ink-200 bg-ink-50/80 text-[13.5px] font-medium text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900 disabled:opacity-50 dark:border-[#2d2d32] dark:bg-[#222226] dark:text-[#d4d4d8] dark:hover:bg-[#2a2a30] dark:hover:text-white"
+          >
+            {pickingNative ? <Spinner className="size-4" /> : <Icon name="plus" className="size-4" />}
+            <span>Add Folder</span>
+          </button>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <div className="text-[13px] font-medium text-ink-600 dark:text-[#a1a1aa]">Remote / Mounted Workspace Path</div>
           <input
-            ref={inputRef}
-            className="input mono pl-8 text-[0.8rem]"
-            placeholder="Paste a folder's path, e.g. ~/projects/my-app"
-            value={input}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowDown') {
-                event.preventDefault()
-                focusList(1)
+            className="input mono py-2 text-[13px]"
+            placeholder="/Volumes/remote-project or mounted SSHFS path"
+            value={remotePath}
+            onChange={(e) => setRemotePath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && remotePath.trim()) {
+                e.preventDefault()
+                void choose(remotePath)
               }
             }}
           />
+          <p className="text-xs leading-relaxed text-ink-500 dark:text-[#71717a]">
+            Connect any mounted remote filesystem (SSHFS / SMB / NFS) accessible to the runtime.
+          </p>
         </div>
-        <button type="submit" className="btn-primary px-3 text-xs" disabled={!input.trim() || opening !== null}>
-          {opening === input.trim() ? <Spinner className="size-3.5" /> : 'Open'}
-        </button>
-      </form>
-      {hasNativeFileDrop && (
-        <p className="mx-4 mt-2 text-xs text-ink-500 dark:text-ink-400">Or drop a folder here</p>
       )}
 
       {openError && (
-        <p className="mx-4 mt-2 flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
+        <p className="mt-3 flex items-start gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
           <Icon name="warning" className="mt-0.5 size-3.5 shrink-0" />
           <span className="min-w-0 break-words">{openError}</span>
         </p>
       )}
+
       {confirmMove && (
-        <div className="mx-4 mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+        <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
           <p>
-            This thread changed {conversation?.changes?.length ?? 0} file{(conversation?.changes?.length ?? 0) === 1 ? '' : 's'} in{' '}
-            <span className="mono">{folderName(conversation?.workspace ?? '')}</span>. Moving it to{' '}
-            <span className="mono">{folderName(confirmMove)}</span> takes them off its Changes list — the files themselves stay as they are, but can no
-            longer be reverted from here.
+            Moving from <span className="mono">{folderName(conversation?.workspace ?? '')}</span> to{' '}
+            <span className="mono">{folderName(confirmMove)}</span> clears the thread&apos;s revertable change tracking.
           </p>
-          <div className="mt-2 flex justify-end gap-1.5">
-            <button type="button" className="btn-ghost px-2 py-0.5 text-xs" onClick={() => setConfirmMove(null)}>
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" className="btn-ghost px-2.5 py-1 text-xs" onClick={() => setConfirmMove(null)}>
               Cancel
             </button>
             <button
               type="button"
-              className="btn-outline bg-white px-2 py-0.5 text-xs dark:bg-transparent"
+              className="btn-primary px-2.5 py-1 text-xs"
               onClick={() => {
                 const target = confirmMove
                 setConfirmMove(null)
                 void choose(target, true)
               }}
             >
-              Move the thread
+              Switch Project
             </button>
           </div>
         </div>
       )}
 
-      <div className="mt-3 min-h-0 flex-1 overflow-y-auto border-t border-ink-100 dark:border-ink-800" ref={listRef}>
-        {recent.length > 0 && (
-          <div className="px-2 pt-2">
-            <div className="menu-label">Recent</div>
-            {recent.map((path) => (
-              <div key={path} className="group flex items-center rounded-lg hover:bg-ink-100 dark:hover:bg-ink-800/70">
-                <button
-                  type="button"
-                  data-entry
-                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none focus-visible:bg-ink-100 dark:focus-visible:bg-ink-800"
-                  onClick={() => void choose(path)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      focusList(event.key === 'ArrowDown' ? 1 : -1)
-                    }
-                  }}
-                  title={path}
-                >
-                  <Icon name="history" className="size-3.5 shrink-0 text-ink-400" />
-                  <span className="shrink-0 text-[0.8rem] font-medium text-ink-800 dark:text-ink-100">{folderName(path)}</span>
-                  <span className="mono min-w-0 truncate text-[0.7rem] text-ink-400 dark:text-ink-500">{tildePath(path, home)}</span>
-                  {conversation?.workspace === path && <span className="badge shrink-0 bg-arc-500/10 text-arc-700 dark:text-arc-300">current</span>}
-                  {opening === path && <Spinner className="ml-auto size-3.5 shrink-0" />}
-                </button>
-                <button
-                  type="button"
-                  className="icon-btn mr-1 size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                  title="Remove from recent folders"
-                  aria-label={`Remove ${path} from recent folders`}
-                  onClick={() => removeRecent(path)}
-                >
-                  <Icon name="x" className="size-3" />
-                </button>
-              </div>
-            ))}
-          </div>
+      {/* Footer Actions: Skip + Select */}
+      <div className="mt-5 flex items-center justify-end gap-2">
+        {(selectedFolder || (tab === 'remote' && remotePath.trim())) && (
+          <button
+            type="button"
+            disabled={opening !== null}
+            onClick={() => {
+              const target = tab === 'remote' ? remotePath : (selectedFolder ?? '')
+              if (target) void choose(target)
+            }}
+            className="inline-flex h-9 items-center gap-1.5 rounded-full bg-arc-600 px-4 text-[13px] font-medium text-white transition-colors hover:bg-arc-500 disabled:opacity-50"
+          >
+            {opening ? <Spinner className="size-3.5" /> : <Icon name="check" className="size-3.5" />}
+            <span>Create Project</span>
+          </button>
         )}
-
-        <div className="px-2 pb-2 pt-2">
-          <div className="flex items-center gap-1 px-1 pb-1">
-            <span className="menu-label px-1.5">Browse</span>
-            <div className="ml-auto flex items-center gap-1">
-              <label className="flex cursor-pointer items-center gap-1.5 px-1 text-[0.7rem] text-ink-500 dark:text-ink-400">
-                <input
-                  type="checkbox"
-                  className="size-3 accent-arc-600"
-                  checked={hidden}
-                  onChange={(event) => {
-                    setHidden(event.target.checked)
-                    void browse(view?.path ?? null, event.target.checked)
-                  }}
-                />
-                Hidden folders
-              </label>
-              <button type="button" className="icon-btn mono size-6 text-[0.8rem]" title="Home folder" aria-label="Home folder" onClick={() => void browse(null)}>
-                ~
-              </button>
-              <button
-                type="button"
-                className="icon-btn size-6"
-                title="Up one folder"
-                aria-label="Up one folder"
-                disabled={!view?.parent}
-                onClick={() => view?.parent && void browse(view.parent)}
-              >
-                <Icon name="arrowUp" className="size-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {view && (
-            <div className="mono flex flex-wrap items-center gap-0.5 px-2 pb-1.5 text-[0.7rem] text-ink-500 dark:text-ink-400">
-              {trail.map((crumb, index) => (
-                <span key={crumb.path} className="flex items-center gap-0.5">
-                  {index > 1 && <Icon name="chevron" className="size-3 text-ink-300 dark:text-ink-600" />}
-                  <button
-                    type="button"
-                    className={`rounded px-1 hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800 dark:hover:text-ink-100 ${index === trail.length - 1 ? 'font-medium text-ink-800 dark:text-ink-100' : ''}`}
-                    onClick={() => void browse(crumb.path)}
-                  >
-                    {crumb.label}
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {browseError ? (
-            <p className="mx-1 flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">
-              <Icon name="warning" className="mt-0.5 size-3.5 shrink-0" />
-              <span className="min-w-0 break-words">
-                {browseError}
-                {/404|not found/i.test(browseError) && ' — this runtime does not offer the folder browser; paste a path above instead.'}
-              </span>
-            </p>
-          ) : !view && browsing ? (
-            <div className="flex items-center gap-2 px-3 py-3 text-xs text-ink-500">
-              <Spinner className="size-3.5" /> Reading folders…
-            </div>
-          ) : view && folders.length === 0 ? (
-            <p className="px-3 py-3 text-xs text-ink-500 dark:text-ink-400">No folders in here.</p>
-          ) : (
-            <div className={browsing ? 'opacity-60' : ''}>
-              {folders.map((entry) => (
-                <button
-                  key={entry.path}
-                  type="button"
-                  data-entry
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1 text-left text-[0.8rem] text-ink-700 outline-none hover:bg-ink-100 focus-visible:bg-ink-100 dark:text-ink-200 dark:hover:bg-ink-800/70 dark:focus-visible:bg-ink-800"
-                  onClick={() => void browse(entry.path)}
-                  onDoubleClick={() => void choose(entry.path)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      focusList(event.key === 'ArrowDown' ? 1 : -1)
-                    } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                      event.preventDefault()
-                      void choose(entry.path)
-                    }
-                  }}
-                  title={`${entry.path} — click to open, double-click to choose`}
-                >
-                  <Icon name="folder" className="size-3.5 shrink-0 text-arc-600/70 dark:text-arc-400/70" />
-                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                  {entry.is_git && (
-                    <span className="badge shrink-0 gap-1 bg-ink-100 text-ink-500 dark:bg-ink-800 dark:text-ink-400">
-                      <Icon name="gitBranch" className="size-3" />
-                      git
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 border-t border-ink-100 bg-ink-50/60 px-4 py-2.5 dark:border-ink-800 dark:bg-ink-950/40">
-        <span className="mono min-w-0 flex-1 truncate text-[0.7rem] text-ink-400 dark:text-ink-500" title={view?.path}>
-          {view ? tildePath(view.path, home) : ''}
-        </span>
-        <button type="button" className="btn-ghost px-3 py-1 text-xs" onClick={onClose}>
-          Cancel
-        </button>
-        <button type="button" className="btn-primary px-3 py-1 text-xs" disabled={!view || opening !== null} onClick={() => view && void choose(view.path)}>
-          {opening && view && opening === view.path ? <Spinner className="size-3.5" /> : <Icon name="check" className="size-3.5" />}
-          Open {view ? `“${folderName(view.path) || view.path}”` : 'this folder'}
+        <button
+          type="button"
+          onClick={handleSkip}
+          className="inline-flex h-9 items-center justify-center rounded-full border border-ink-200 bg-ink-100 px-4 text-[13px] font-medium text-ink-700 transition-colors hover:bg-ink-200 hover:text-ink-950 dark:border-[#323236] dark:bg-[#232328] dark:text-[#e4e4e7] dark:hover:bg-[#2d2d33] dark:hover:text-white"
+        >
+          Skip
         </button>
       </div>
-      {dragging && (
-        <div className="pointer-events-none absolute inset-1 z-10 grid place-items-center rounded-xl border-2 border-dashed border-arc-500 bg-arc-500/10">
-          <span className="rounded-lg bg-white px-4 py-2 text-sm font-medium shadow-md dark:bg-ink-900">Drop a folder here</span>
-        </div>
-      )}
     </div>
   )
 }
 
-/** The folder picker: a global modal, opened through `useUi.openWorkspacePicker`. */
 export function WorkspacePicker() {
   const picker = useUi((s) => s.workspacePicker)
   const close = useUi((s) => s.closeWorkspacePicker)
   return (
-    <Modal open={picker !== null} onClose={close} label="Open a folder" className="max-w-xl">
+    <Modal
+      open={picker !== null}
+      onClose={close}
+      label="Create Project"
+      className="max-w-[500px] !rounded-2xl dark:!border-[#2c2c30] dark:!bg-[#18181b]"
+    >
       {picker && <PickerBody key={picker.conversationId ?? 'new'} conversationId={picker.conversationId} onClose={close} />}
     </Modal>
   )

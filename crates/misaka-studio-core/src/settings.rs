@@ -192,6 +192,8 @@ pub enum ImageBackendKind {
     /// The `diffusers` sidecar (`sidecars/diffusion/server.py`), driven as a child process —
     /// the same shape as `llama-server`/`mlx_lm.server` for chat.
     Diffusion,
+    /// Built-in deterministic preview generator requiring no Python sidecar or downloaded weights.
+    Mock,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

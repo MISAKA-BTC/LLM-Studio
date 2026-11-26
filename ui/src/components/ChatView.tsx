@@ -17,6 +17,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { startAgentRun, stopAgentRun, useAgent } from '../lib/agent/run'
+import { folderName, rememberWorkspace } from '../lib/agent/workspace'
+import { api } from '../lib/api'
 import { useFileDrop } from '../lib/fileDrop'
 import type { ChatMessage, Conversation } from '../lib/types'
 import { useStudio } from '../store/studio'
@@ -162,8 +164,10 @@ export function ChatView() {
     const delta = element.scrollTop - lastScrollTop.current
     lastScrollTop.current = element.scrollTop
     const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_EPSILON_PX
-    if (!bottom || delta < 0) followRef.current = false
-    else if (delta > 0) followRef.current = true
+    // Ignore delta === 0 layout-correction scroll events from `applyTop`, so resizing a side panel
+    // while following the bottom cannot accidentally disengage auto-follow.
+    if (delta < 0) followRef.current = false
+    else if (delta > 0) followRef.current = bottom
     atBottomRef.current = bottom
     setAtBottom(bottom)
   }
@@ -266,6 +270,31 @@ export function ChatView() {
       void attachFiles(threadKey, files)
       useUi.getState().focusComposer()
     },
+    onFolderPaths: (paths) => {
+      const target = paths[0]
+      if (!target) return
+      void api.workspace
+        .open(target)
+        .then((info) => {
+          const ui = useUi.getState()
+          const studio = useStudio.getState()
+          rememberWorkspace(info)
+          ui.setNoProject(false)
+          ui.addRecentWorkspace(info.root)
+          if (ui.appMode !== 'code') ui.setAppMode('code')
+          if (conversation) {
+            if (conversation.mode !== 'agent') studio.setConversationMode(conversation.id, 'agent')
+            studio.setConversationWorkspace(conversation.id, info.root)
+          } else {
+            studio.newConversation({ mode: 'agent', workspace: info.root })
+          }
+          studio.toast('success', `プロジェクト「${folderName(info.root)}」を開きました`)
+          ui.focusComposer()
+        })
+        .catch((err: unknown) => {
+          useStudio.getState().toast('error', (err as Error).message)
+        })
+    },
   })
 
   return (
@@ -323,11 +352,11 @@ export function ChatView() {
         )}
 
         {dragging && (
-          <div className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-[6px] border border-dashed border-arc-500 bg-arc-500/5">
-            <div className="flex flex-col items-center gap-1.5 rounded-[4px] border border-ink-300 bg-white px-5 py-3.5 text-center shadow-lg dark:border-[#454545] dark:bg-ink-850">
+          <div className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-[10px] border-2 border-dashed border-arc-500 bg-arc-500/8 backdrop-blur-[1px]">
+            <div className="flex flex-col items-center gap-1.5 rounded-xl border border-ink-300 bg-white px-6 py-4 text-center shadow-xl dark:border-[#38383f] dark:bg-[#18181b]">
               <Icon name="upload" className="size-5 text-arc-600 dark:text-arc-400" />
-              <span className="text-xs font-semibold">Drop to attach</span>
-              <span className="text-[11px] text-ink-500 dark:text-ink-400">Text files, up to 200 KB each — never mined</span>
+              <span className="text-[13px] font-semibold text-ink-900 dark:text-white">ファイル・フォルダをドロップ</span>
+              <span className="text-[11.5px] text-ink-500 dark:text-[#a1a1aa]">ファイルはメッセージに添付 · フォルダはプロジェクトとして設定されます</span>
             </div>
           </div>
         )}

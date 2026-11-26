@@ -333,6 +333,41 @@ const PATHS = {
       <path d="m20 20 2 2" />
     </>
   ),
+  folderPlus: (
+    <>
+      <path d="M12 10v6M9 13h6" />
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </>
+  ),
+  folderOff: (
+    <>
+      <path d="M9 3h-5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h15" />
+      <path d="M22 17V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9" />
+      <path d="m2 2 20 20" />
+    </>
+  ),
+  worktree: (
+    <>
+      <path d="M12 21V11" />
+      <path d="M12 11 6 5" />
+      <path d="M6 9V5h4" />
+      <path d="m12 11 6-6" />
+      <path d="M14 5h4v4" />
+    </>
+  ),
+  shieldAlert: (
+    <>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="M12 8v4M12 16h.01" />
+    </>
+  ),
+  mic: (
+    <>
+      <rect x="9" y="2" width="6" height="11" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8" />
+    </>
+  ),
+  cloud: <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />,
 } as const
 
 export function Spinner({ className = 'size-4' }: { className?: string }) {

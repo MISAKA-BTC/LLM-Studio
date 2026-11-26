@@ -13,8 +13,6 @@ import { WebChip } from './WebChip'
 // second stop here would be a stop of whatever starts next.
 
 import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { api } from '../../lib/api'
-import { attachmentFromText, baseName, MAX_ATTACHMENT_BYTES } from '../../lib/attachments'
 import { stopAgentRun, useAgent } from '../../lib/agent/run'
 import { bytes } from '../../lib/format'
 import { matches } from '../../lib/keys'
@@ -22,9 +20,7 @@ import { isWebTask, webEnabled } from '../../lib/web'
 import {
   findCommand,
   fuzzyFilter,
-  insertMention,
   matchCommands,
-  mentionAt,
   parseSlash,
   parseToggle,
   pickModel,
@@ -34,12 +30,13 @@ import {
 import type { Conversation, ConversationMode } from '../../lib/types'
 import { chatModelId, useStudio } from '../../store/studio'
 import { useUi } from '../../store/ui'
-import { AgentControls } from '../agent/AgentControls'
+import { AgentControls, ApprovalPicker } from '../agent/AgentControls'
 import { Icon } from '../common'
 import { newThreadHere, openFolder, projectForNewSession, switchAppMode } from '../shell/actions'
 import { useNewSessionProject } from '../shell/useSessionProject'
 import { IconButton, Kbd, Popover } from '../ui'
 import { AttachmentChip } from './AttachmentChip'
+import { ComposerContextBar } from './ComposerContextBar'
 import { attachFiles, draftKey, useComposer, useDraft } from './composerStore'
 import { downloadMarkdown } from './exportMarkdown'
 import { busyConversation, queueFollowUp, removeFollowUp, retryFollowUp, sendFromComposer, useFollowUps, useSendingIn } from './followUps'
@@ -105,6 +102,7 @@ export const Composer = memo(function Composer({
   const sendingIn = useSendingIn()
   const followUps = useFollowUps(conversation?.id)
   const thinking = useUi((s) => s.thinking)
+  const noProject = useUi((s) => s.noProject)
   const focusTick = useUi((s) => s.composerFocusTick)
   const composerDraft = useUi((s) => s.composerDraft)
 
@@ -112,17 +110,18 @@ export const Composer = memo(function Composer({
   const card = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const menuList = useRef<HTMLDivElement>(null)
-  const [caret, setCaret] = useState(0)
+  const recognitionRef = useRef<{ stop: () => void } | null>(null)
+  const [listening, setListening] = useState(false)
+  const [dropTrayOpen, setDropTrayOpen] = useState(false)
   const [focused, setFocused] = useState(false)
   const [menuIndex, setMenuIndex] = useState(0)
   /** The text a menu was dismissed at: it stays shut until the text changes. */
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
-  const [mentionResults, setMentionResults] = useState<{ query: string; paths: string[]; error: string | null } | null>(null)
   const lastFocus = useRef<{ tick: number; key: string } | null>(null)
 
-  const mode: ConversationMode = conversation ? (conversation.mode ?? 'chat') : side === 'code' ? 'agent' : 'chat'
+  const mode: ConversationMode = conversation ? (conversation.mode ?? 'chat') : side === 'code' && !noProject ? 'agent' : 'chat'
   // Before the session exists, `@` searches the folder it will be made in.
-  const workspace = mode === 'agent' ? (conversation ? (conversation.workspace ?? null) : pendingProject) : null
+  const workspace = conversation ? (conversation.workspace ?? null) : side === 'code' && !noProject ? pendingProject : null
   const runningIn = sendingIn ?? agentRunIn ?? streamingIn
   const busyHere = runningIn !== null && runningIn === conversation?.id
   const busyElsewhere = runningIn !== null && !busyHere
@@ -157,7 +156,6 @@ export const Composer = memo(function Composer({
       if (!element) return
       element.focus({ preventScroll: true })
       element.setSelectionRange(composerDraft.text.length, composerDraft.text.length)
-      setCaret(composerDraft.text.length)
     })
   }, [composerDraft, key])
 
@@ -292,12 +290,17 @@ export const Composer = memo(function Composer({
       }
       composer.clear(key)
       id = studio.newConversation({ mode, workspace: project })
+      if (mode === 'agent') studio.setConversationApproval(id, useUi.getState().defaultApproval)
       if (project) useUi.getState().addRecentWorkspace(project)
     }
 
     if (mode === 'agent' && !webTask && conversation && !conversation.workspace) {
-      useUi.getState().openWorkspacePicker(id)
-      return
+      if (useUi.getState().noProject) {
+        studio.setConversationMode(conversation.id, 'chat')
+      } else {
+        useUi.getState().openWorkspacePicker(id)
+        return
+      }
     }
 
     if (conversation) composer.clear(key)
@@ -312,58 +315,9 @@ export const Composer = memo(function Composer({
     textarea.current?.focus({ preventScroll: true })
   }
 
-  // --- menus: `/` commands and `@` files ----------------------------------------------------------
+  // --- menus: `/` commands only (files & folders use direct drag-and-drop instead of global search) ---
 
   const slash = slashInput(draft.text)
-  const mention = !slash && workspace ? mentionAt(draft.text, caret) : null
-  const mentionQuery = mention?.query ?? null
-
-  useEffect(() => {
-    if (mentionQuery === null || !workspace) {
-      setMentionResults(null)
-      return
-    }
-    let current = true
-    const controller = new AbortController()
-    // Debounced: a request per keystroke would outrun the walk of a large tree.
-    const timer = setTimeout(async () => {
-      try {
-        const { paths } = await api.workspace.files(workspace, mentionQuery, 50, controller.signal, { cache: true })
-        if (current) setMentionResults({ query: mentionQuery, paths, error: null })
-      } catch {
-        // The runtime may predate the workspace endpoints. Quietly: the menu says it, nothing else.
-        if (current) setMentionResults({ query: mentionQuery, paths: [], error: 'File search is not available from this runtime.' })
-      }
-    }, 120)
-    return () => {
-      current = false
-      controller.abort()
-      clearTimeout(timer)
-    }
-  }, [mentionQuery, workspace])
-
-  const chooseMention = async (path: string) => {
-    if (!mention || !workspace) return
-    const next = insertMention(draft.text, mention.start, caret, path)
-    setText(key, next.text)
-    setCaret(next.caret)
-    requestAnimationFrame(() => {
-      textarea.current?.focus()
-      textarea.current?.setSelectionRange(next.caret, next.caret)
-    })
-    try {
-      const file = await api.workspace.read(workspace, path, { max_bytes: MAX_ATTACHMENT_BYTES })
-      if (file.binary) {
-        useStudio.getState().toast('info', `${baseName(path)} is a binary file — it is mentioned, but its content is not attached.`)
-        return
-      }
-      useComposer
-        .getState()
-        .addAttachments(key, [attachmentFromText(path, file.content, { size: file.size, truncated: file.truncated, workspacePath: path })])
-    } catch (error) {
-      useStudio.getState().toast('info', `${path} could not be read: ${(error as Error).message}`)
-    }
-  }
 
   let entries: MenuEntry[] = []
   let menuTitle = ''
@@ -426,32 +380,10 @@ export const Composer = memo(function Composer({
         entries = [{ key: command.name, icon: 'slash', label: <span className="mono">/{command.name}</span>, detail: command.description, choose: () => runCommand(command, '') }]
       }
     }
-  } else if (mention) {
-    menuTitle = workspace ? `Files in ${baseName(workspace)}` : 'Files'
-    // The last answer stays up while the next is fetched, so the list does not blink per keystroke.
-    const results = mentionResults
-    if (results?.error) entries = [{ key: 'error', label: <span className="text-ink-500 dark:text-ink-400">{results.error}</span>, disabled: true, choose: () => {} }]
-    else if (results && results.paths.length === 0)
-      entries = [{ key: 'none', label: <span className="text-ink-500 dark:text-ink-400">No file matches “{mention.query}”</span>, disabled: true, choose: () => {} }]
-    else
-      entries = (results?.paths ?? []).map((path) => {
-        const slashAt = path.lastIndexOf('/')
-        return {
-          key: path,
-          icon: 'file',
-          label: (
-            <span className="min-w-0 truncate">
-              <span className="text-ink-800 dark:text-ink-100">{path.slice(slashAt + 1)}</span>
-              {slashAt > 0 && <span className="ml-1.5 text-ink-400 dark:text-ink-500">{path.slice(0, slashAt)}</span>}
-            </span>
-          ),
-          choose: () => void chooseMention(path),
-        }
-      })
   }
 
   const menuOpen = focused && entries.length > 0 && dismissedAt !== draft.text
-  const menuIdentity = slash ? `${slash.name}|${slash.arg ?? ''}` : mention ? `@${mention.query}` : ''
+  const menuIdentity = slash ? `${slash.name}|${slash.arg ?? ''}` : ''
   useEffect(() => setMenuIndex(0), [menuIdentity])
   useEffect(() => {
     menuList.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' })
@@ -501,11 +433,78 @@ export const Composer = memo(function Composer({
 
   const placeholder = busyHere
     ? 'Send a follow-up to queue it'
-    : mode === 'agent'
-      ? workspace
-        ? 'Describe a task — @ to mention a file, / for commands'
-        : 'Describe a task — you will choose its folder first'
-      : 'Ask anything — / for commands'
+    : 'Ask anything — drop files or folders here, / for actions'
+
+  const toggleVoiceInput = () => {
+    if (listening) {
+      recognitionRef.current?.stop()
+      recognitionRef.current = null
+      setListening(false)
+      return
+    }
+    const SpeechCtor = (
+      window as unknown as {
+        SpeechRecognition?: new () => {
+          continuous: boolean
+          interimResults: boolean
+          lang: string
+          onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+          onerror: (() => void) | null
+          onend: (() => void) | null
+          start: () => void
+          stop: () => void
+        }
+        webkitSpeechRecognition?: new () => {
+          continuous: boolean
+          interimResults: boolean
+          lang: string
+          onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+          onerror: (() => void) | null
+          onend: (() => void) | null
+          start: () => void
+          stop: () => void
+        }
+      }
+    ).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: never }).webkitSpeechRecognition
+    if (!SpeechCtor) {
+      useStudio.getState().toast('info', 'Voice dictation is not available in this system webview.')
+      return
+    }
+    try {
+      const rec = new (SpeechCtor as new () => {
+        continuous: boolean
+        interimResults: boolean
+        lang: string
+        onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal?: boolean }> }) => void) | null
+        onerror: (() => void) | null
+        onend: (() => void) | null
+        start: () => void
+        stop: () => void
+      })()
+      rec.continuous = false
+      rec.interimResults = false
+      rec.lang = navigator.language || 'ja-JP'
+      rec.onresult = (event) => {
+        const last = event.results[event.results.length - 1]
+        const transcript = last?.[0]?.transcript?.trim()
+        if (!transcript) return
+        const prev = useComposer.getState().drafts[key]?.text ?? ''
+        const next = prev ? `${prev}${/\s$/.test(prev) ? '' : ' '}${transcript}` : transcript
+        setText(key, next)
+      }
+      rec.onerror = () => setListening(false)
+      rec.onend = () => {
+        recognitionRef.current = null
+        setListening(false)
+      }
+      recognitionRef.current = rec
+      setListening(true)
+      rec.start()
+    } catch {
+      setListening(false)
+      useStudio.getState().toast('info', 'Could not start microphone dictation.')
+    }
+  }
 
   return (
     <div className="w-full">
@@ -522,111 +521,154 @@ export const Composer = memo(function Composer({
           ))}
         </ul>
       )}
-      <div
-        ref={card}
-        className={`@container rounded-[6px] border bg-white transition-colors dark:bg-ink-850 ${
-          focused
-            ? 'border-arc-500 dark:border-arc-500'
-            : 'border-ink-300 dark:border-ink-700'
-        }`}
-      >
-        {draft.attachments.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 border-b border-ink-200/70 px-3 py-2 dark:border-ink-800">
-            {draft.attachments.map((attachment) => (
-              <AttachmentChip key={attachment.id} attachment={attachment} onRemove={() => removeAttachment(key, attachment.id)} />
-            ))}
-          </div>
-        )}
-
-        <textarea
-          ref={textarea}
-          rows={1}
-          value={draft.text}
-          placeholder={placeholder}
-          aria-label={mode === 'agent' ? 'Task for the agent' : 'Message'}
-          spellCheck
-          className={`block w-full resize-none bg-transparent px-3 py-2.5 text-[13.5px] leading-relaxed text-ink-900 outline-none placeholder:text-ink-400 dark:text-[#e1e1e1] dark:placeholder:text-ink-400 ${
-            variant === 'hero' ? 'min-h-[4.25rem]' : ''
+      <div className="rounded-[14px] border border-ink-200/90 bg-ink-100/75 p-1 dark:border-[#2a2a2e] dark:bg-[#141417]">
+        <ComposerContextBar conversation={conversation} workspace={workspace} />
+        <div
+          ref={card}
+          className={`@container rounded-[11px] border bg-white transition-colors dark:bg-[#1b1b1f] ${
+            focused
+              ? 'border-arc-500/80 dark:border-[#3e3e46]'
+              : 'border-ink-200 dark:border-[#2a2a30]'
           }`}
-          onChange={(event) => {
-            setText(key, event.target.value)
-            setCaret(event.target.selectionStart)
-          }}
-          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          onKeyDown={onKeyDown}
-          onPaste={(event) => {
-            const files = Array.from(event.clipboardData.files)
-            if (files.length === 0) return
-            event.preventDefault()
-            void attachFiles(key, files)
-          }}
-        />
+        >
+          {dropTrayOpen && (
+            <div className="mx-3 mt-2.5 flex items-center justify-between gap-3 rounded-[9px] border border-dashed border-ink-300 bg-ink-50/70 px-3 py-2 text-xs text-ink-600 dark:border-[#34343c] dark:bg-[#141418] dark:text-[#a1a1aa]">
+              <button
+                type="button"
+                onClick={() => fileInput.current?.click()}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-ink-900 dark:hover:text-white"
+              >
+                <Icon name="upload" className="size-4 shrink-0 text-arc-500" />
+                <span className="truncate">
+                  ファイルをここにドラッグ＆ドロップして追加（またはクリックして選択）
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-label="Close file drop bar"
+                onClick={() => setDropTrayOpen(false)}
+                className="icon-btn size-6"
+              >
+                <Icon name="x" className="size-3.5" />
+              </button>
+            </div>
+          )}
 
-        <div className="flex items-center gap-1 whitespace-nowrap border-t border-ink-200/70 bg-ink-50/50 px-2 py-1.5 dark:border-ink-800 dark:bg-[#1e1e1e]">
-          <div className="flex min-w-0 items-center gap-1">
-            <IconButton icon="paperclip" label="Attach text files" onClick={() => fileInput.current?.click()} />
-            <input
-              ref={fileInput}
-              type="file"
-              multiple
-              hidden
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? [])
-                event.target.value = ''
-                if (files.length) void attachFiles(key, files)
-                textarea.current?.focus()
-              }}
-            />
-            {conversation && mode === 'agent' && (
-              <div className="flex min-w-0 items-center gap-1">
-                <AgentControls conversation={conversation} />
-              </div>
-            )}
-          </div>
+          {draft.attachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 border-b border-ink-200/70 px-3 py-2 dark:border-[#2a2a30]">
+              {draft.attachments.map((attachment) => (
+                <AttachmentChip key={attachment.id} attachment={attachment} onRemove={() => removeAttachment(key, attachment.id)} />
+              ))}
+            </div>
+          )}
 
-          <div className="-my-0.5 ml-auto flex min-w-0 shrink-[8] items-center justify-end gap-1 overflow-hidden py-0.5 pr-0.5">
-            {!thinking && (
+          <textarea
+            ref={textarea}
+            rows={1}
+            value={draft.text}
+            placeholder={placeholder}
+            aria-label={mode === 'agent' ? 'Task for the agent' : 'Message'}
+            spellCheck
+            className={`block w-full resize-none bg-transparent px-3.5 pb-2 pt-3 text-[13.5px] leading-relaxed text-ink-900 outline-none placeholder:text-ink-400 dark:text-[#e4e4e7] dark:placeholder:text-[#71717a] ${
+              variant === 'hero' ? 'min-h-[3.75rem]' : ''
+            }`}
+            onChange={(event) => {
+              setText(key, event.target.value)
+            }}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onKeyDown={onKeyDown}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData.files)
+              if (files.length === 0) return
+              event.preventDefault()
+              void attachFiles(key, files)
+            }}
+          />
+
+          <div className="flex items-center gap-1 whitespace-nowrap px-2.5 pb-2.5 pt-1">
+            <div className="flex min-w-0 items-center gap-1">
+              <IconButton
+                icon="plus"
+                label="Drop or attach files"
+                active={dropTrayOpen}
+                onClick={() => setDropTrayOpen((v) => !v)}
+              />
+              <input
+                ref={fileInput}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? [])
+                  event.target.value = ''
+                  if (files.length) {
+                    void attachFiles(key, files)
+                    setDropTrayOpen(false)
+                  }
+                  textarea.current?.focus()
+                }}
+              />
+              <ModelPicker />
+              <WebChip conversation={conversation} createThread={createHere} disabled={busyHere || busyElsewhere} />
+              <MiningChip conversation={conversation} compact />
+              {conversation && mode === 'agent' && <AgentControls conversation={conversation} />}
+            </div>
+
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              {!thinking && (
+                <button
+                  type="button"
+                  className="chip shrink-0 text-ink-500 dark:text-ink-400"
+                  onClick={() => useUi.getState().setThinking(true)}
+                  aria-label="Thinking is off. Turn it on"
+                  title="Thinking is off: click to let reasoning models think again."
+                >
+                  <Icon name="brain" className="size-3.5" />
+                </button>
+              )}
+
+              <ApprovalPicker conversation={conversation} />
+
               <button
                 type="button"
-                className="chip shrink-0 text-ink-500 dark:text-ink-400"
-                onClick={() => useUi.getState().setThinking(true)}
-                aria-label="Thinking is off. Turn it on"
-                title="Thinking is off: each request sends thinking: false. Click to let reasoning models think again."
+                onClick={toggleVoiceInput}
+                aria-label={listening ? 'Stop voice dictation' : 'Voice dictation'}
+                title={listening ? 'Listening… click to stop' : 'Voice dictation'}
+                className={`inline-flex size-8 shrink-0 items-center justify-center rounded-full transition-colors ${
+                  listening
+                    ? 'bg-red-500/15 text-red-500'
+                    : 'text-ink-500 hover:bg-ink-100 hover:text-ink-900 dark:text-[#a1a1aa] dark:hover:bg-white/6 dark:hover:text-white'
+                }`}
               >
-                <Icon name="brain" className="size-3.5" />
-                <span className="hidden line-through decoration-ink-400 @2xl:inline">Thinking</span>
+                <Icon name="mic" className="size-4" />
               </button>
-            )}
-            <WebChip conversation={conversation} createThread={createHere} disabled={busyHere || busyElsewhere} />
-            <MiningChip conversation={conversation} compact={mode === 'agent'} />
-            <ModelPicker />
-            {canStop && (
-              <button
-                type="button"
-                className="ml-1 inline-flex h-[26px] shrink-0 items-center gap-1 rounded-[3px] border border-red-400/60 bg-red-600 px-2 text-xs font-medium text-white transition-colors hover:bg-red-500"
-                onClick={stopHere}
-                aria-label={mode === 'agent' ? 'Stop the agent' : 'Stop generating'}
-                title="Stop (Esc)"
-              >
-                <span className="size-2 rounded-[1px] bg-current" />
-                <span className="hidden @xl:inline">Stop</span>
-              </button>
-            )}
-            {(!canStop || canSend) && (
-              <button
-                type="button"
-                className="ml-1 inline-flex h-[26px] shrink-0 items-center gap-1 rounded-[3px] bg-arc-600 px-2.5 text-xs font-medium text-white transition-colors hover:bg-arc-700 disabled:bg-ink-200 disabled:text-ink-400 dark:disabled:bg-[#313131] dark:disabled:text-ink-500"
-                onClick={() => void submit()}
-                disabled={!canSend}
-                aria-label={isCommand ? 'Run command' : willQueue ? 'Queue follow-up' : 'Send'}
-                title={isCommand ? 'Run the command (Enter)' : willQueue ? 'Queue follow-up (Enter)' : 'Send (Enter)'}
-              >
-                <Icon name="arrowUp" className="size-3.5" />
-                <span className="hidden @xl:inline">Send</span>
-              </button>
-            )}
+
+              {canStop && (
+                <button
+                  type="button"
+                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-red-600 text-white transition-colors hover:bg-red-500"
+                  onClick={stopHere}
+                  aria-label={mode === 'agent' ? 'Stop the agent' : 'Stop generating'}
+                  title="Stop (Esc)"
+                >
+                  <span className="size-2.5 rounded-[2px] bg-current" />
+                </button>
+              )}
+
+              {(!canStop || canSend) && (
+                <button
+                  type="button"
+                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-[#3b82f6] text-white shadow-xs transition-colors hover:bg-[#2563eb] disabled:bg-ink-200 disabled:text-ink-400 dark:disabled:bg-[#27272a] dark:disabled:text-[#52525b]"
+                  onClick={() => void submit()}
+                  disabled={!canSend}
+                  aria-label={isCommand ? 'Run command' : willQueue ? 'Queue follow-up' : 'Send'}
+                  title={isCommand ? 'Run the command (Enter)' : willQueue ? 'Queue follow-up (Enter)' : 'Send (Enter)'}
+                >
+                  <Icon name="arrowRight" className="size-4" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

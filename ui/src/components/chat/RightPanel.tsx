@@ -249,7 +249,7 @@ function ChatPanel({ conversation, tab }: { conversation: Conversation | null; t
 
   return (
     <aside
-      className="flex w-[340px] max-w-full shrink-0 flex-col border-l border-ink-200 bg-ink-50 dark:border-ink-800 dark:bg-ink-950 max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 max-xl:shadow-2xl max-xl:shadow-black/30 dark:max-xl:shadow-black/60"
+      className="flex w-[320px] max-w-full shrink-0 flex-col border-l border-ink-200 bg-ink-50 dark:border-ink-800 dark:bg-ink-950 max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-30 max-lg:shadow-2xl max-lg:shadow-black/30 dark:max-lg:shadow-black/60"
       aria-label="Thread panel"
     >
       <div className="flex h-8 shrink-0 items-stretch gap-0.5 border-b border-ink-200 px-2 dark:border-ink-800" role="tablist" aria-label="Panels">

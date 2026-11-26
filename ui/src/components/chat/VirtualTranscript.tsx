@@ -1,4 +1,5 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { splitThinking } from '../../lib/reasoning'
 import type { ChatMessage } from '../../lib/types'
 import { captureTranscriptAnchor, TranscriptHeights, transcriptWindow } from '../../lib/transcriptWindow'
 import { useStudio } from '../../store/studio'
@@ -27,8 +28,29 @@ const DEFAULT_VIEWPORT = 600
 
 function estimateHeight(message: ChatMessage, width: number): number {
   const columns = Math.max(25, Math.floor(width / 8))
-  const text = message.content.length + (message.reasoning?.length ?? 0)
-  return Math.min(16_000, 88 + Math.ceil(text / columns) * 23 + (message.toolCalls?.length ?? 0) * 140)
+  const inline = splitThinking(message.content)
+  const reasoningText = message.reasoning ?? inline.thinking
+  // Finished reasoning blocks render collapsed as a single ~32px summary row; counting all
+  // reasoning characters inflated collapsed turns by thousands of pixels on resize.
+  const reasoningHeight = reasoningText
+    ? message.streaming
+      ? Math.min(360, 36 + Math.ceil(reasoningText.length / columns) * 20)
+      : 36
+    : 0
+  const text = inline.answer.length
+  return Math.min(16_000, 88 + reasoningHeight + Math.ceil(text / columns) * 23 + (message.toolCalls?.length ?? 0) * 96)
+}
+
+function predictedRowHeight(message: ChatMessage, measured: Measurement | undefined, width: number): number {
+  if (measured?.message === message && measured.height > 0) {
+    if (Math.abs(measured.width - width) < 2) return measured.height
+    if (measured.width > 0 && width > 0) {
+      const ratio = Math.min(1.35, Math.max(0.72, measured.width / width))
+      return Math.max(40, Math.round(measured.height * ratio))
+    }
+    return measured.height
+  }
+  return estimateHeight(message, width)
 }
 
 function anchorAt(geometry: Geometry, top: number): Anchor | null {
@@ -51,7 +73,7 @@ export const VirtualTranscript = memo(function VirtualTranscript({ threadKey, ac
 }) {
   const { rows, editingId } = snapshot
   const measurements = useRef(new Map<string, Measurement>())
-  const initialWidth = Math.max(200, Math.min(760, scroll.element.current?.clientWidth || 760) - 32)
+  const initialWidth = Math.round(Math.max(200, Math.min(760, scroll.element.current?.clientWidth || 760) - 32))
   const [width, setWidth] = useState(initialWidth)
   const geometry = useMemo<Geometry>(() => {
     const indices = new Map(rows.map((message, index) => [message.id, index]))
@@ -60,10 +82,7 @@ export const VirtualTranscript = memo(function VirtualTranscript({ threadKey, ac
     return {
       rows,
       indices,
-      heights: new TranscriptHeights(rows.map((message) => {
-        const measured = measurements.current.get(message.id)
-        return measured?.message === message && Math.abs(measured.width - width) < 2 ? measured.height : estimateHeight(message, width)
-      })),
+      heights: new TranscriptHeights(rows.map((message) => predictedRowHeight(message, measurements.current.get(message.id), width))),
     }
   }, [rows, width])
   const [viewport, setViewport] = useState(() => ({
@@ -89,7 +108,7 @@ export const VirtualTranscript = memo(function VirtualTranscript({ threadKey, ac
     const anchor = anchorAt(current.current.geometry, next.top)
     scroll.record(threadKey, { top: next.top, following: scroll.following.current, ...(anchor ? { anchor: { id: anchor.id, offset: anchor.offset } } : {}) })
     setViewport((before) => before.top === next.top && before.height === next.height ? before : next)
-    const measuredWidth = list.current?.getBoundingClientRect().width ?? 0
+    const measuredWidth = Math.round(list.current?.getBoundingClientRect().width ?? 0)
     if (measuredWidth > 0) setWidth((before) => Math.abs(before - measuredWidth) < 2 ? before : measuredWidth)
   }, [getScroll, scroll, threadKey])
   const applyTop = useCallback((top: number) => {
@@ -107,7 +126,8 @@ export const VirtualTranscript = memo(function VirtualTranscript({ threadKey, ac
     if (!ready.current) return
     const element = getScroll()
     if (!element) return
-    const { geometry: layout, width: measuredWidth } = current.current
+    const { geometry: layout } = current.current
+    const liveWidth = Math.round(list.current?.getBoundingClientRect().width || current.current.width)
     let changed = false
     const anchor = pendingAnchor.current ?? anchorAt(layout, element.scrollTop)
     for (const node of nodes) {
@@ -117,7 +137,7 @@ export const VirtualTranscript = memo(function VirtualTranscript({ threadKey, ac
       const height = node.getBoundingClientRect().height
       // display:none (Activity) and DOM test environments report zero: neither is a row height.
       if (height <= 0) continue
-      measurements.current.set(id!, { message: layout.rows[index]!, width: measuredWidth, height })
+      measurements.current.set(id!, { message: layout.rows[index]!, width: liveWidth, height })
       if (layout.heights.measure(index, height)) changed = true
     }
     if (changed) {
@@ -164,11 +184,29 @@ export const VirtualTranscript = memo(function VirtualTranscript({ threadKey, ac
 
     let frame: number | null = null
     const onScroll = () => {
+      if (Math.abs(element.scrollTop - scroll.lastTop.current) >= 1) pendingAnchor.current = null
       if (frame !== null) return
       frame = requestAnimationFrame(() => { frame = null; readViewport() })
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     const resize = new ResizeObserver((entries) => {
+      const liveWidth = Math.round(list.current?.getBoundingClientRect().width ?? 0)
+      if (liveWidth > 0 && Math.abs(liveWidth - current.current.width) >= 2) {
+        // Column width changed (e.g. toggling a side panel). Capture the reading anchor from the
+        // untouched previous geometry and record every mounted row's reflowed DOM height under
+        // `liveWidth` BEFORE rebuilding `geometry`, so the next render has exact heights immediately.
+        const { geometry: prevGeometry } = current.current
+        if (!pendingAnchor.current) pendingAnchor.current = anchorAt(prevGeometry, element.scrollTop)
+        for (const node of elements.current.values()) {
+          const id = node.dataset.virtualRow
+          const index = id ? prevGeometry.indices.get(id) : undefined
+          if (index === undefined) continue
+          const height = node.getBoundingClientRect().height
+          if (height > 0) measurements.current.set(id!, { message: prevGeometry.rows[index]!, width: liveWidth, height })
+        }
+        readViewport()
+        return
+      }
       readViewport()
       measureElements(entries.flatMap((entry) => (entry.target as HTMLDivElement).dataset.virtualRow ? [entry.target as HTMLDivElement] : []))
     })
@@ -195,23 +233,38 @@ export const VirtualTranscript = memo(function VirtualTranscript({ threadKey, ac
   const following = ready.current ? scroll.following.current : saved?.following ?? true
   const sourceTop = !ready.current && saved ? anchoredTop(geometry, saved.anchor ? { ...saved.anchor, beforeTop: saved.top } : null, saved.top) : viewport.top
   const rebuilding = committed.current !== geometry
-  const resizeAnchor = pendingAnchor.current
-  const usableAnchor = resizeAnchor && Math.abs((getScroll()?.scrollTop ?? sourceTop) - resizeAnchor.beforeTop) < 1 ? resizeAnchor : null
-  const anchor = usableAnchor ?? (rebuilding ? anchorAt(committed.current, sourceTop) : null)
+  const anchor = pendingAnchor.current ?? (rebuilding ? anchorAt(committed.current, sourceTop) : null)
   const renderTop = following ? Math.max(0, geometry.heights.total + PADDING * 2 - viewport.height) : anchoredTop(geometry, anchor, sourceTop)
 
   useLayoutEffect(() => {
     if (!active || !ready.current) return
-    // A user scroll that happened after the measurement wins over the old anchor.
-    // Read the queue now: initial row measurements may have arrived earlier in this same commit.
-    const queued = pendingAnchor.current
+    // Do not compare against `element.scrollTop` after DOM commit: shrinking `list.style.height`
+    // (e.g. closing a side panel so rows unwrap shorter) causes WebKit to clamp `element.scrollTop`
+    // before `useLayoutEffect` runs, which previously discarded `pendingAnchor.current`.
     const currentTop = getScroll()?.scrollTop ?? viewport.top
-    const measuredAnchor = queued && Math.abs(currentTop - queued.beforeTop) < 1 ? queued : null
-    const updateAnchor = measuredAnchor ?? (committed.current !== geometry ? anchorAt(committed.current, viewport.top) : null)
+    const updateAnchor = pendingAnchor.current ?? (committed.current !== geometry ? anchorAt(committed.current, viewport.top) : null)
+
+    // Synchronously measure any mounted rows (including newly-mounted overscan rows after a width
+    // change) before paint so no row stays stuck on an estimate.
+    let remeasured = false
+    if (committed.current !== geometry && elements.current.size > 0) {
+      const liveWidth = Math.round(list.current?.getBoundingClientRect().width || width)
+      for (const node of elements.current.values()) {
+        const id = node.dataset.virtualRow
+        const index = id ? geometry.indices.get(id) : undefined
+        if (index === undefined) continue
+        const height = node.getBoundingClientRect().height
+        if (height <= 0) continue
+        measurements.current.set(id!, { message: geometry.rows[index]!, width: liveWidth, height })
+        if (geometry.heights.measure(index, height)) remeasured = true
+      }
+    }
+
     if (scroll.following.current) applyTop(geometry.heights.total + PADDING * 2)
     else if (updateAnchor) applyTop(anchoredTop(geometry, updateAnchor, currentTop))
     pendingAnchor.current = null
     committed.current = geometry
+    if (remeasured) setRevision((value) => value + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, geometry, revision, viewport.height])
 

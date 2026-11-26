@@ -60,6 +60,109 @@ export async function checkWorkbenchShell(ctx) {
       assert.equal(list.scrollTop, 64)
     })
 
+    await check('TitleBar layout toggles never switch out of Chat or hide the active chat conversation', async () => {
+      await act(async () => {
+        useStudio.setState({ view: 'chat', activeConversationId: a.id })
+        useUi.setState({ appMode: 'chat', sidebarOpen: true, bottomPanelOpen: false, rightPanel: null })
+      })
+      await flush()
+      const header = document.querySelector('header[aria-label="Workbench title bar"]')
+      assert.ok(header)
+      const leftBtn = header.querySelector('button[aria-label*="Primary Side Bar"]')
+      const bottomBtn = header.querySelector('button[aria-label*="Bottom Panel"]')
+      const rightBtn = header.querySelector('button[aria-label*="Secondary Side Bar"]')
+      assert.ok(leftBtn && bottomBtn && rightBtn)
+
+      // Toggle Left Sidebar off and back on — chat stays visible
+      await act(async () => leftBtn.click())
+      assert.equal(useUi.getState().sidebarOpen, false)
+      assert.equal(useUi.getState().appMode, 'chat')
+      assert.equal(useStudio.getState().activeConversationId, a.id)
+      assert.ok(findVisible('textarea[aria-label="Message"]'))
+      await act(async () => leftBtn.click())
+      assert.equal(useUi.getState().sidebarOpen, true)
+
+      // Toggle Bottom Panel on and off — chat stays visible, appMode stays 'chat', activeConversationId stays a.id
+      await act(async () => bottomBtn.click())
+      assert.equal(useUi.getState().bottomPanelOpen, true)
+      assert.equal(useUi.getState().appMode, 'chat')
+      assert.equal(useStudio.getState().activeConversationId, a.id)
+      assert.ok(findVisible('textarea[aria-label="Message"]'))
+      assert.ok(findVisible('section[aria-label="Workbench bottom panel"]'))
+      await act(async () => bottomBtn.click())
+      assert.equal(useUi.getState().bottomPanelOpen, false)
+      assert.equal(useUi.getState().appMode, 'chat')
+      assert.equal(useStudio.getState().activeConversationId, a.id)
+      assert.ok(findVisible('textarea[aria-label="Message"]'))
+
+      // Toggle Right Secondary Side Bar on and off — chat stays visible
+      await act(async () => rightBtn.click())
+      assert.equal(useUi.getState().rightPanel, 'context')
+      assert.equal(useUi.getState().appMode, 'chat')
+      assert.equal(useStudio.getState().activeConversationId, a.id)
+      assert.ok(findVisible('textarea[aria-label="Message"]'))
+      await act(async () => rightBtn.click())
+      assert.equal(useUi.getState().rightPanel, null)
+      assert.ok(findVisible('textarea[aria-label="Message"]'))
+    })
+
+    await check('Image Studio renders full controls without installed weights and Agent composer renders top workspace/branch bar', async () => {
+      await go('image')
+      assert.ok(findVisible('textarea[placeholder*="Describe the image"]'), 'Image prompt form is visible even with zero installed image models')
+      assert.ok(findVisible('input[placeholder*="author/model"]'), 'Diffusers checkpoint installer is visible')
+
+      const agentSession = { ...fixture(7777), mode: 'agent', workspace: '/fixture/gemini-bar-project' }
+      const prevOpen = fixtures['/api/v1/workspace/open']
+      const prevStatus = fixtures['/api/v1/workspace/git/status']
+      const prevBrowse = fixtures['/api/v1/workspace/browse']
+      fixtures['/api/v1/workspace/open'] = { root: agentSession.workspace, name: 'gemini-bar-project', is_git: true, branch: 'main' }
+      fixtures['/api/v1/workspace/git/status'] = { root: agentSession.workspace, is_git: true, branch: 'main', head: 'abc1234', upstream: null, ahead: 0, behind: 0, files: [], staged: 0, unstaged: 0, untracked: 0 }
+      fixtures['/api/v1/workspace/browse'] = { path: '/fixture', parent: '/', home: '/fixture', entries: [] }
+      try {
+        await act(async () => {
+          useStudio.setState({ conversations: [...useStudio.getState().conversations, agentSession], activeConversationId: agentSession.id, view: 'chat' })
+          useUi.setState({ appMode: 'code' })
+        })
+        await flush()
+        const contextBar = findVisible('[role="toolbar"][aria-label="Workspace and branch context"]')
+        assert.ok(contextBar, 'Gemini-style top context bar is rendered above the Agent composer')
+        assert.match(contextBar.textContent, /This Computer/)
+        assert.match(contextBar.textContent, /gemini-bar-project/)
+        assert.match(contextBar.textContent, /main/)
+        assert.ok(findVisible('button[title^="Execution mode: Turbo"]'), 'Turbo execution mode picker is rendered on composer bottom-right')
+        assert.ok(findVisible('button[aria-label="Voice dictation"]'), 'Voice dictation mic button is rendered')
+        assert.ok(findVisible('button[aria-label="Send"]'), 'Circular Send button is rendered')
+
+        // Open Project dropdown and verify New Project + No Project items, then open Create Project modal
+        const folderTrigger = findVisible('button[aria-label^="Workspace folder:"]')
+        await act(async () => folderTrigger.click())
+        const newProjectBtn = [...document.querySelectorAll('button')].find((b) => visible(b) && b.textContent.trim() === 'New Project')
+        const noProjectBtn = [...document.querySelectorAll('button')].find((b) => visible(b) && b.textContent.trim() === 'No Project')
+        assert.ok(newProjectBtn && noProjectBtn, 'Project menu shows New Project and No Project')
+        await act(async () => newProjectBtn.click())
+        const dialog = findVisible('[role="dialog"][aria-label="Create Project"]')
+        assert.ok(dialog, 'Create Project dialog opens')
+        assert.match(dialog.textContent, /This Computer/)
+        assert.match(dialog.textContent, /Remote/)
+        assert.match(dialog.textContent, /Select Folder\(s\)/)
+        assert.match(dialog.textContent, /Add Folder/)
+        const skipBtn = [...dialog.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Skip')
+        assert.ok(skipBtn, 'Skip button is present in Create Project dialog')
+        await act(async () => skipBtn.click())
+        assert.equal(useUi.getState().workspacePicker, null)
+        await act(async () => useUi.getState().setNoProject(false))
+      } finally {
+        if (prevOpen === undefined) delete fixtures['/api/v1/workspace/open']; else fixtures['/api/v1/workspace/open'] = prevOpen
+        if (prevStatus === undefined) delete fixtures['/api/v1/workspace/git/status']; else fixtures['/api/v1/workspace/git/status'] = prevStatus
+        if (prevBrowse === undefined) delete fixtures['/api/v1/workspace/browse']; else fixtures['/api/v1/workspace/browse'] = prevBrowse
+        await act(async () => {
+          useStudio.setState({ conversations: useStudio.getState().conversations.filter((c) => c.id !== agentSession.id), activeConversationId: a.id, view: 'chat' })
+          useUi.setState({ appMode: 'chat' })
+        })
+        await flush()
+      }
+    })
+
     await check('5000 conversation sidebar mounts one window and keyboard End/Home reaches the entire archive', async () => {
       const archive = Array.from({ length: 5000 }, (_, index) => fixture(index))
       await act(async () => useStudio.setState({ conversations: archive, activeConversationId: archive[0].id, view: 'chat' }))
