@@ -149,7 +149,11 @@ fn views(models: &[LocalModel], hardware: &HardwareSnapshot, settings: &Settings
             if profile.as_ref().is_some_and(|p| model.path.canonicalize().ok().as_ref() == Some(p)) {
                 v.recommended_context = model.context_length.unwrap_or(8192).min(8192);
                 v.requirements = model.requirements(v.recommended_context);
-                v.fit = crate::backend::strata::streaming_fit(&settings.backend.strata, hardware);
+                v.fit = if crate::backend::strata::is_inkling_pack(&model.path) {
+                    FitVerdict::assess(&v.requirements, hardware)
+                } else {
+                    crate::backend::strata::streaming_fit(&settings.backend.strata, hardware)
+                };
                 v.fit_summary = v.fit.summary();
                 v.identity = None;
             }

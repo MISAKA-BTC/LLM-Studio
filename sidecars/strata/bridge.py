@@ -27,6 +27,7 @@ def prepare(profile, context, arena_gb, io_threads, prefetch):
     args = cfg.get("args")
     if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
         raise ValueError("Strata profile args must be a list of strings")
+    inkling = cfg.get("arch") == "inkling2_loop"
     # Resolve upstream paths against its own cwd, never the Studio executable's directory.
     def path(value):
         p = Path(value)
@@ -45,7 +46,7 @@ def prepare(profile, context, arena_gb, io_threads, prefetch):
             i += 2
             continue
         if flag == "--vision":
-            i += 1
+            i += 2 if inkling else 1
             continue
         if flag in path_flags:
             if i + 1 >= len(args):
@@ -62,21 +63,26 @@ def prepare(profile, context, arena_gb, io_threads, prefetch):
         else:
             out.append(flag)
             i += 1
-    if "--native" not in out or "--pack" not in out or "--ple-gguf" not in out:
-        raise ValueError("Use a prepared Strata Metal profile with --native, --pack and --ple-gguf")
-    out.extend(["--max-context", str(context), "--spec", "1", "--suffix-draft", "0", "--ple-io", "mmap"])
-    if "--mmap-experts" not in out:
-        out.append("--mmap-experts")
+    if "--native" not in out:
+        raise ValueError("Use a prepared Strata Metal profile with --native")
+    out.extend(["--max-context", str(context)])
+    if not inkling:
+        if "--pack" not in out or "--ple-gguf" not in out:
+            raise ValueError("Use a prepared Strata Flash-Next profile with --pack and --ple-gguf")
+        out.extend(["--spec", "1", "--suffix-draft", "0", "--ple-io", "mmap"])
+        if "--mmap-experts" not in out:
+            out.append("--mmap-experts")
     cfg["args"] = out
     env = dict(cfg.get("env") or {})
-    env.update(STRATA_METAL_STREAM="1", STRATA_METAL_STREAM_FAKE="0",
-               STRATA_METAL_IO_THREADS=str(io_threads), STRATA_METAL_PREFETCH=str(prefetch),
-               STRATA_METAL_PROMPT_CHUNK="1024", STRATA_PLE_AUTO_RAM="0")
     env.pop("STRATA_API_KEY", None)
-    env.pop("STRATA_METAL_ARENA_GB", None)
-    os.environ.pop("STRATA_METAL_ARENA_GB", None)
-    if arena_gb is not None:
-        env["STRATA_METAL_ARENA_GB"] = str(arena_gb)  # upstream uses decimal GB
+    if not inkling:
+        env.update(STRATA_METAL_STREAM="1", STRATA_METAL_STREAM_FAKE="0",
+                   STRATA_METAL_IO_THREADS=str(io_threads), STRATA_METAL_PREFETCH=str(prefetch),
+                   STRATA_METAL_PROMPT_CHUNK="1024", STRATA_PLE_AUTO_RAM="0")
+        env.pop("STRATA_METAL_ARENA_GB", None)
+        os.environ.pop("STRATA_METAL_ARENA_GB", None)
+        if arena_gb is not None:
+            env["STRATA_METAL_ARENA_GB"] = str(arena_gb)  # upstream uses decimal GB
     cfg["env"] = env
     os.environ.update(env)
     os.environ.pop("STRATA_API_KEY", None)

@@ -458,6 +458,54 @@ try {
     await checkRuntimePolling({ act, check, flush, findVisible, window, document, fixtures, requests, go, promptStackResource, miningQueueResource })
   }
 
+  await check('the engine picker keeps Strata selected before a model is prepared', async () => {
+    const trigger = 'button[aria-label="Select inference engine"]'
+    const clickEngine = async (label) => {
+      await act(async () => findVisible(trigger).click())
+      const option = [...document.querySelectorAll('button.menu-item')].find((item) =>
+        visible(item) && item.querySelector('span')?.textContent === label)
+      assert.ok(option, `Expected ${label} in the engine picker`)
+      await act(async () => option.click())
+      await flush()
+    }
+    const initial = useStudio.getState().settings
+    const originalFixture = fixtures['/api/v1/settings']
+    let current = { ...settings, backend: { ...settings.backend, kind: 'llama_cpp' } }
+    fixtures['/api/v1/settings'] = (_url, options) => {
+      if (options.method === 'PUT') current = JSON.parse(options.body)
+      return current
+    }
+    try {
+      await act(async () => useStudio.setState({ settings: current }))
+      const previousView = useStudio.getState().view
+      await clickEngine('Strata')
+      assert.equal(useStudio.getState().view, previousView)
+      assert.equal(current.backend.kind, 'strata')
+      assert.equal(useStudio.getState().settings.backend.kind, 'strata')
+      assert.match(findVisible(trigger).textContent, /Strata/)
+      assert.match(findVisible(trigger).title, /Strata model required/)
+
+      fixtures['/api/v1/settings'] = (_url, options) => {
+        if (options.method === 'PUT') {
+          current = JSON.parse(options.body)
+          current.backend.strata.config_path = '/models/strata.json'
+        }
+        return current
+      }
+      await clickEngine('Strata')
+      assert.equal(current.backend.kind, 'strata')
+      assert.equal(useStudio.getState().settings.backend.kind, 'strata')
+      assert.equal(current.backend.strata.config_path, '/models/strata.json')
+      assert.doesNotMatch(findVisible(trigger).title, /Strata model required/)
+
+      await clickEngine('llama.cpp')
+      assert.equal(useStudio.getState().settings.backend.kind, 'llama_cpp')
+    } finally {
+      fixtures['/api/v1/settings'] = originalFixture
+      await act(async () => useStudio.setState({ settings: initial }))
+    }
+  })
+
   await act(async () => root.unmount())
   root = null
   assert.equal(intervals.size, 0, 'All view intervals are disposed at shutdown')

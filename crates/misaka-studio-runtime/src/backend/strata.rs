@@ -1,5 +1,5 @@
-//! Strata Metal's real SSD expert pager, behind its upstream OpenAI server.
-//! Only a prepared profile's exact native GGUF is routed here. Dense GGUFs and
+//! Strata Metal's native engines, behind its upstream OpenAI server.
+//! Only a prepared profile's exact native model is routed here. Dense GGUFs and
 //! unrelated MoE architectures never acquire SSD support just by choosing a backend.
 use super::openai_child::{ChildEngine, ChildEngineConfig};
 use super::{Availability, GenerationRequest, InferenceBackend, LoadRequest, LoadedModel, StreamEvent};
@@ -7,18 +7,22 @@ use crate::{Error, Result};
 use futures_util::{future::BoxFuture, stream::BoxStream};
 use misaka_studio_core::{
     hardware::HardwareSnapshot,
-    model::{FitVerdict, LocalModel},
+    model::{FitVerdict, LocalModel, ModelSource},
     provenance::RuntimeDescriptor,
     settings::{Settings, StrataSettings},
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
+    io::Read,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 const BRIDGE: &str = include_str!("../../../../sidecars/strata/bridge.py");
+const INKLING_ARCH: &str = "inkling2_loop";
+// Default directory used by scripts/install-strata.py.
+pub(crate) const MANAGED_INSTALL: &str = "engines/strata/c62d5e3a15b4";
 
 #[derive(Deserialize)]
 struct Profile {
@@ -26,6 +30,7 @@ struct Profile {
     cwd: Option<PathBuf>,
     tokenizer: PathBuf,
     backend: String,
+    arch: Option<String>,
     args: Vec<String>,
 }
 
@@ -34,6 +39,7 @@ pub struct PreparedProfile {
     pub root: PathBuf,
     pub native: PathBuf,
     pub exe: PathBuf,
+    pub inkling: bool,
 }
 
 impl PreparedProfile {
@@ -70,18 +76,79 @@ impl PreparedProfile {
             resolve(Path::new(v))
         };
         let native = value("--native")?;
-        value("--pack")?;
-        value("--ple-gguf")?;
-        let model = LocalModel::inspect(&native, Default::default())?;
-        if model.expert_count.unwrap_or(0) == 0 {
-            return Err(Error::bad_request("Strata SSD streaming requires a prepared MoE model; this GGUF has no experts"));
+        let inkling = cfg.arch.as_deref() == Some(INKLING_ARCH);
+        if inkling {
+            inspect_inkling_pack(&native, Default::default())?;
+        } else {
+            value("--pack")?;
+            value("--ple-gguf")?;
+            let model = LocalModel::inspect(&native, Default::default())?;
+            if model.expert_count.unwrap_or(0) == 0 {
+                return Err(Error::bad_request("Strata SSD streaming requires a prepared MoE model; this GGUF has no experts"));
+            }
         }
-        Ok(Self { path, root, native, exe })
+        Ok(Self { path, root, native, exe, inkling })
     }
 
     pub fn matches(&self, model: &LocalModel) -> bool {
         model.path.canonicalize().is_ok_and(|p| p == self.native)
     }
+}
+
+pub(crate) fn is_inkling_pack(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("strata"))
+}
+
+pub(crate) fn inspect_inkling_pack(path: &Path, source: ModelSource) -> Result<LocalModel> {
+    let name = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|_| is_inkling_pack(path))
+        .ok_or_else(|| Error::bad_request("Select a prepared Inkling .strata model pack"))?;
+    let mut file = std::fs::File::open(path).map_err(|e| Error::io(path.display(), e))?;
+    let meta = file.metadata().map_err(|e| Error::io(path.display(), e))?;
+    let mut header = [0; 24];
+    file.read_exact(&mut header).map_err(|e| Error::io(path.display(), e))?;
+    // Official packs can append metadata after the extent declared in the v1.1 header.
+    let declared_size = u64::from_le_bytes(header[16..24].try_into().expect("eight-byte size"));
+    if &header[..12] != b"STRATA\0\x01\x01\0\0\0" || !(header.len() as u64..=meta.len()).contains(&declared_size) {
+        return Err(Error::bad_request("Inkling .strata pack is incomplete or has an unsupported header"));
+    }
+    Ok(LocalModel {
+        id: name.into(),
+        name: name.into(),
+        path: path.to_path_buf(),
+        size_bytes: meta.len(),
+        quantization: None,
+        architecture: Some(INKLING_ARCH.into()),
+        parameter_count: None,
+        context_length: None,
+        block_count: None,
+        expert_count: None,
+        kv_cache_bytes_per_token: None,
+        has_chat_template: false,
+        source,
+        sha256: None,
+        modified_at: meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()),
+    })
+}
+
+pub(crate) fn discover_managed_profile(data_dir: &Path) -> Option<PathBuf> {
+    let root = data_dir.join(MANAGED_INSTALL).canonicalize().ok()?;
+    let exe = root.join("build-metal/strata");
+    if !exe.is_file() || exe.canonicalize().ok()? != exe {
+        return None;
+    }
+    let mut profiles = std::fs::read_dir(&root)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| entry.file_name().to_str().is_some_and(|name| name.starts_with("strata-") && name.ends_with(".json")))
+        .filter_map(|entry| PreparedProfile::read(&entry.path()).ok())
+        .filter(|profile| profile.exe == exe && profile.root.canonicalize().is_ok_and(|path| path == root));
+    let profile = profiles.next()?;
+    // When multiple packs are present let the user choose which model to register.
+    profiles.next().is_none().then_some(profile.path)
 }
 
 pub fn validate_settings(settings: &StrataSettings, hardware: &HardwareSnapshot) -> Result<()> {
@@ -145,7 +212,10 @@ impl StrataBackend {
         let python = settings
             .python_path
             .clone()
-            .or_else(|| profile.as_ref().map(|p| p.root.join(".venv/bin/python")).filter(|p| p.is_file()))
+            .or_else(|| {
+                let root = &profile.as_ref()?.root;
+                [root.join("python/bin/python"), root.join(".venv/bin/python")].into_iter().find(|path| path.is_file())
+            })
             .unwrap_or_else(|| "python3".into());
         let options = settings.clone();
         Self {
@@ -166,11 +236,9 @@ impl StrataBackend {
     }
 
     fn profile(&self) -> Result<PreparedProfile> {
-        let path = self
-            .settings
-            .config_path
-            .as_deref()
-            .ok_or_else(|| Error::bad_request("Set a prepared Strata profile in Settings → Strata SSD streaming"))?;
+        let path = self.settings.config_path.as_deref().ok_or_else(|| {
+            Error::bad_request("Prepare a Strata model in the default installation or choose its profile in Settings → Backend")
+        })?;
         validate_settings(&self.settings, &self.hardware)?;
         PreparedProfile::read(path)
     }
@@ -208,9 +276,9 @@ impl InferenceBackend for StrataBackend {
     fn descriptor(&self) -> BoxFuture<'_, RuntimeDescriptor> {
         Box::pin(async move {
             // Fingerprint the actual native engine and profile, never Python's version.
-            let fingerprint = self
-                .profile()
-                .ok()
+            let profile = self.profile().ok();
+            let engine = if profile.as_ref().is_some_and(|p| p.inkling) { "inkling" } else { "ssd" };
+            let fingerprint = profile
                 .and_then(|p| {
                     let mut h = Sha256::new();
                     h.update(BRIDGE.as_bytes());
@@ -225,8 +293,8 @@ impl InferenceBackend for StrataBackend {
                 engine_commit: "unknown".into(),
                 engine_patch_sha256: "unknown".into(),
                 engine_build_number: 0,
-                build_profile: format!("{}-{}-metal-ssd:{fingerprint}", std::env::consts::OS, std::env::consts::ARCH),
-                class_tag: "strata-metal-ssd-nonconsensus".into(),
+                build_profile: format!("{}-{}-metal-{engine}:{fingerprint}", std::env::consts::OS, std::env::consts::ARCH),
+                class_tag: format!("strata-metal-{engine}-nonconsensus"),
             }
         })
     }
@@ -246,9 +314,10 @@ impl InferenceBackend for StrataBackend {
                     remedy: remedy.into(),
                 };
             }
-            if let Err(e) = self.profile() {
-                return Availability::Unavailable { reason: e.to_string(), remedy: remedy.into() };
-            }
+            let profile = match self.profile() {
+                Ok(profile) => profile,
+                Err(e) => return Availability::Unavailable { reason: e.to_string(), remedy: remedy.into() },
+            };
             let mut args = bridge_args(&self.settings, 8192, 0);
             args.push("--check".into());
             let result = match tokio::time::timeout(
@@ -258,7 +327,8 @@ impl InferenceBackend for StrataBackend {
             .await
             {
                 Ok(Ok(out)) if out.status.success() => {
-                    Availability::Available { detail: "Strata Metal · SSD expert paging · loopback server".into() }
+                    let model = if profile.inkling { "Inkling" } else { "SSD expert paging" };
+                    Availability::Available { detail: format!("Strata Metal · {model} · loopback server") }
                 }
                 Ok(Ok(out)) => Availability::Unavailable {
                     reason: String::from_utf8_lossy(&out.stderr).chars().rev().take(1500).collect::<String>().chars().rev().collect(),
@@ -274,7 +344,7 @@ impl InferenceBackend for StrataBackend {
         Box::pin(async move {
             let p = self.profile()?;
             if request.model_path.canonicalize().ok().as_ref() != Some(&p.native) {
-                return Err(Error::bad_request("This GGUF is not the native model in the prepared Strata profile"));
+                return Err(Error::bad_request("This model is not the native model in the prepared Strata profile"));
             }
             if self.hardware.total_memory < 16 * (1 << 30) {
                 return Err(Error::bad_request("Strata streaming requires at least 16 GiB of unified memory"));
@@ -330,6 +400,36 @@ pub(crate) mod tests {
         h.total_memory = 24 * (1 << 30);
         h.available_memory = 12 * (1 << 30);
         h
+    }
+
+    #[tokio::test]
+    async fn inkling_pack_is_registered_through_its_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = fixture(dir.path(), 512);
+        let path = dir.path().join("Inkling-2-Mini-SQ-10.strata");
+        let mut header = [0u8; 80];
+        header[..12].copy_from_slice(b"STRATA\0\x01\x01\0\0\0");
+        header[16..24].copy_from_slice(&64u64.to_le_bytes());
+        std::fs::write(&path, header).unwrap();
+        std::fs::write(
+            &profile,
+            serde_json::to_vec(&serde_json::json!({
+                "exe": "strata", "cwd": ".", "tokenizer": "pack/tokenizer", "backend": "metal",
+                "arch": "inkling2_loop", "args": ["--native", "Inkling-2-Mini-SQ-10.strata"]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(PreparedProfile::read(&profile).unwrap().inkling);
+        let mut settings = Settings { models_dir: dir.path().join("models"), ..Default::default() };
+        settings.backend.strata.config_path = Some(profile.clone());
+        let store = crate::store::ModelStore::new(model_roots(&settings));
+        let models = store.refresh().await.unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "Inkling-2-Mini-SQ-10");
+        assert!(configured_for(&settings.backend.strata, &models[0]));
+        std::fs::write(&path, &header[..32]).unwrap();
+        assert!(PreparedProfile::read(&profile).is_err());
     }
 
     #[tokio::test]

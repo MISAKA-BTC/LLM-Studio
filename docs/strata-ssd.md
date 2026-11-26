@@ -2,7 +2,9 @@
 
 Studio can supervise the [Strata Metal engine](https://github.com/Niko1221/Strata) and its upstream OpenAI server. The actual expert pager and Metal kernels run in Strata, outside the Studio process. This is a separate backend from llama.cpp's mmap/CPU offload.
 
-The integration currently supports **prepared Strata Metal MoE profiles on Apple Silicon, macOS 15+**. It does not turn arbitrary GGUFs into supported Strata models. In particular, the dense Huihui Qwen 27B model has no routed experts and continues to use llama.cpp.
+The integration supports **prepared Flash-Next and Inkling 2 Mini Strata Metal profiles on Apple Silicon, macOS 15+**. The dense Huihui Qwen 27B model continues to use llama.cpp.
+
+An Inkling profile uses `"arch": "inkling2_loop"` and `"backend": "metal"`. Point `exe` at the upstream `strata-inkling` Metal executable, `cwd` at the upstream Control directory containing `serve/server.py`, and `tokenizer` at the [model repository's tokenizer directory](https://huggingface.co/strata-engine/Inkling-2-Mini-Strata). Set `args` to include `--native` followed by the `.strata` pack path. Select this profile in **Settings → Backend → Strata · Metal inference**. Studio uses Control's packaged Python when available. The SSD cache knobs below apply to Flash-Next.
 
 ## Install the native engine
 
@@ -18,7 +20,7 @@ The installer checks out upstream commit `c62d5e3a15b40ea51c96aae9e8d36928965f53
 
 1. Check the SSD space needed by the chosen pack. For example, upstream's Q2_0 Flash-Next pack includes about 37.6 GB of main weights plus a 28.8 GB n-gram table, with additional preparation space. Optional contiguous expert copies need more space. Use the upstream [Mac setup documentation](https://github.com/Niko1221/Strata/blob/main/docs/MAC.md) for the chosen pack.
 2. Run the preparation command printed by the installer. It uses upstream setup with `--context 8192 --vision no --no-start`. Keep the generated model, pack/tokenizer and companion GGUFs together with their `strata-<model>.json` configuration.
-3. In **Settings → Backend → Strata · SSD expert streaming**, enter that JSON profile's absolute path and save. The Python interpreter is detected from the Strata installation's `.venv/bin/python`, or can be specified explicitly.
+3. Choose **Strata** from the status bar. Studio automatically registers a single valid profile in the default engine installation. Select Strata again after preparing a model, or restart Studio if Strata is already selected. For multiple profiles or a custom install, enter the chosen JSON path under **Settings → Backend → Strata · Metal inference**. Studio uses the installation's `.venv/bin/python` when available.
 4. The profile's native GGUF appears in the model list, even when it is outside the ordinary models directory. Choose it in Chat or Code. Auto mode routes this exact file to Strata. Other GGUFs retain their normal backend. The explicit Strata engine preference also falls back to the normal engine for unrelated GGUFs.
 
 Readiness checks report missing executables, companion files, malformed profiles, dense models or missing Python dependencies before startup. Choosing a matching profile model whose companion has disappeared reports a Strata error; it does not silently try llama.cpp.

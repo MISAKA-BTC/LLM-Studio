@@ -424,6 +424,8 @@ impl ScanFiles<'_> {
         let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
         let model = if palw::is_artifact_filename(&name) {
             inspect_palw_artifact(path, sidecar)
+        } else if crate::backend::strata::is_inkling_pack(path) {
+            crate::backend::strata::inspect_inkling_pack(path, sidecar.source).ok()
         } else {
             match LocalModel::inspect(path, sidecar.source.clone()) {
                 Ok(mut model) => {

@@ -128,7 +128,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new(settings: Settings, settings_path: PathBuf, data_dir: PathBuf) -> Arc<Self> {
+    pub async fn new(mut settings: Settings, settings_path: PathBuf, data_dir: PathBuf) -> Arc<Self> {
         // Hardware discovery can invoke driver tools. Keep it, and the monitor's first system
         // snapshot, off the async workers that serve HTTP and streaming connections.
         let (hardware, metrics) = tokio::task::spawn_blocking(|| {
@@ -138,6 +138,9 @@ impl AppState {
         })
         .await
         .expect("hardware discovery task");
+        if settings.backend.kind == BackendKind::Strata && settings.backend.strata.config_path.is_none() {
+            settings.backend.strata.config_path = crate::backend::strata::discover_managed_profile(&data_dir);
+        }
         let store = Arc::new(ModelStore::new(crate::backend::strata::model_roots(&settings)));
         if let Err(e) = store.refresh().await {
             tracing::warn!("initial model scan failed: {e}");
@@ -426,8 +429,11 @@ impl AppState {
     /// behaviour — the loaded model may not exist under the new directory, and it certainly is
     /// not loaded in the new engine — and it is stated in the API response rather than left for
     /// the user to discover when generation fails.
-    pub async fn apply_settings(&self, new: Settings) -> Result<Settings> {
+    pub async fn apply_settings(&self, mut new: Settings) -> Result<Settings> {
         let old = self.settings.read().await.clone();
+        if new.backend.kind == BackendKind::Strata && new.backend.strata.config_path.is_none() {
+            new.backend.strata.config_path = crate::backend::strata::discover_managed_profile(&self.data_dir);
+        }
         if new.backend.strata != old.backend.strata
             || (new.backend.kind == BackendKind::Strata && old.backend.kind != BackendKind::Strata)
         {
@@ -1503,6 +1509,9 @@ fn palw_q36_container(path: &std::path::Path) -> bool {
 /// the pairing IS the decision, and it is the part that was getting answered by another program's
 /// stderr.
 fn engine_pairing_refusal(model_id: &str, file_name: Option<&str>, backend: &str) -> Option<String> {
+    if backend != "strata" && file_name.is_some_and(|name| crate::backend::strata::is_inkling_pack(std::path::Path::new(name))) {
+        return Some(format!("{model_id} needs its prepared Strata profile. Choose it in Settings → Backend."));
+    }
     let is_artifact = file_name.is_some_and(palw::is_artifact_filename);
     // Two engines read a class artifact: the integer runtime directly, and the free-prompt gateway,
     // which runs that same runtime under the lane that prices the work. Spelled as a set because a
@@ -1733,6 +1742,36 @@ mod tests {
         assert_eq!(state.backend_for(&model(12, 65), &settings).await.name(), "llamacpp");
         settings.backend.kind = BackendKind::Auto;
         assert_eq!(state.backend_for(&native, &settings).await.name(), "strata");
+    }
+
+    #[tokio::test]
+    async fn strata_preference_persists_before_and_after_managed_model_preparation() {
+        use crate::backend::strata::MANAGED_INSTALL;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let data_dir = dir.path().join("data");
+        let mut settings = Settings { models_dir: dir.path().join("models"), ..Default::default() };
+        let state = AppState::new(settings.clone(), path.clone(), data_dir.clone()).await;
+        settings.backend.kind = BackendKind::Strata;
+        let selected = state.apply_settings(settings).await.unwrap();
+        assert!(selected.backend.strata.config_path.is_none());
+        assert_eq!(Settings::load(&path).unwrap().backend.kind, BackendKind::Strata);
+        assert_eq!(state.backend_for(&model(12, 65), &selected).await.name(), "llamacpp");
+
+        let root = data_dir.join(MANAGED_INSTALL);
+        let profile = crate::backend::strata::tests::fixture(&root, 512);
+        std::fs::create_dir(root.join("build-metal")).unwrap();
+        std::fs::rename(root.join("strata"), root.join("build-metal/strata")).unwrap();
+        let text = std::fs::read_to_string(&profile).unwrap().replace("\"exe\":\"strata\"", "\"exe\":\"build-metal/strata\"");
+        std::fs::write(&profile, text).unwrap();
+
+        let restarted = AppState::new(Settings::load(&path).unwrap(), path.clone(), data_dir).await;
+        assert!(restarted.store.require("native").await.is_ok());
+        let updated = state.apply_settings(selected).await.unwrap();
+        assert_eq!(updated.backend.strata.config_path, Some(profile.canonicalize().unwrap()));
+        let native = state.store.require("native").await.unwrap();
+        assert_eq!(state.backend_for(&native, &updated).await.name(), "strata");
     }
 
     use misaka_studio_core::hardware::{Accelerator, AcceleratorKind};

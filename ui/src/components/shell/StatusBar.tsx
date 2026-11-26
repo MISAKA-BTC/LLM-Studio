@@ -10,11 +10,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useAgent } from '../../lib/agent/run'
 import { useWorkspaceInfo } from '../../lib/agent/workspace'
 import { bytes, tokens } from '../../lib/format'
-import type { Offload } from '../../lib/types'
+import type { Offload, Settings } from '../../lib/types'
 import { chatModelId, useStudio } from '../../store/studio'
 import { useUi } from '../../store/ui'
 import { Icon, Spinner, Toggle } from '../common'
 import { ModelPickerPanel } from '../chat/ModelPicker'
+import { busyConversation } from '../chat/followUps'
 import { Kbd, MenuItem, MenuLabel, MenuSeparator, Popover, PopoverButton, StatusDot } from '../ui'
 import { goTo, openSidePanel, openThread, setMiningMode, setPromptStack } from './actions'
 import { useGitStatus } from '../code/gitStore'
@@ -86,17 +87,7 @@ function RuntimeSegment() {
 
   return (
     <>
-      <button
-        type="button"
-        className={`inline-flex h-full shrink-0 items-center gap-1.5 px-2.5 font-medium text-white transition-colors ${
-          connected ? 'bg-arc-600 hover:bg-arc-700' : 'bg-amber-600 hover:bg-amber-700'
-        }`}
-        title={`${status}${runtime ? ` · backend ${runtime.backend}` : ''}`}
-        onClick={() => goTo('models')}
-      >
-        <Icon name="bolt" className="size-3 shrink-0" />
-        <span className="hidden sm:inline">{connected ? (runtime?.backend ?? 'runtime') : 'offline'}</span>
-      </button>
+      <BackendPicker connected={connected} backend={runtime?.backend} modelLoaded={Boolean(runtime?.model_id)} status={status} />
       <ProjectSegment />
       {loadingModelId ? (
         <span className="inline-flex h-full min-w-0 shrink items-center gap-1.5 px-2" title={`Loading ${loadingModelId}`}>
@@ -138,6 +129,77 @@ function RuntimeSegment() {
         </span>
       )}
     </>
+  )
+}
+
+const LOCAL_ENGINES = [
+  { kind: 'llama_cpp', label: 'llama.cpp' },
+  { kind: 'strata', label: 'Strata' },
+] as const satisfies readonly { kind: Settings['backend']['kind']; label: string }[]
+
+function BackendPicker({ connected, backend, modelLoaded, status }: { connected: boolean; backend?: string; modelLoaded: boolean; status: string }) {
+  const settings = useStudio((s) => s.settings)
+  const [switching, setSwitching] = useState(false)
+  const configured = settings?.backend.kind
+  const hasStrataProfile = Boolean(settings?.backend.strata?.config_path?.trim())
+  const runtimeLabel = backend === 'llamacpp' ? 'llama.cpp' : backend === 'strata' ? 'Strata' : backend ?? 'runtime'
+  const preferred = LOCAL_ENGINES.find(({ kind }) => kind === configured)?.label
+  const label = preferred ?? runtimeLabel
+  const activeElsewhere = modelLoaded && backend && label !== runtimeLabel
+  const awaitingProfile = configured === 'strata' && !hasStrataProfile
+
+  const select = async (kind: (typeof LOCAL_ENGINES)[number]['kind'], close: () => void) => {
+    const studio = useStudio.getState()
+    const current = studio.settings
+    if (!studio.connected || !current || switching) return
+    if (current.backend.kind === kind && (kind !== 'strata' || current.backend.strata?.config_path)) return
+    if (studio.loadingModelId || busyConversation()) {
+      studio.toast('info', 'Wait for the current model load or reply to finish before changing the engine.')
+      return
+    }
+    setSwitching(true)
+    try {
+      await studio.saveSettings({ ...current, backend: { ...current.backend, kind } })
+      if (useStudio.getState().settings?.backend.kind === kind) close()
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  return (
+    <PopoverButton
+      className={`inline-flex h-full shrink-0 items-center gap-1.5 px-2.5 font-medium text-white transition-colors ${
+        connected ? 'bg-arc-600 hover:bg-arc-700' : 'bg-amber-600 hover:bg-amber-700'
+      }`}
+      label="Select inference engine"
+      title={[status, preferred && `Preferred: ${preferred}`, modelLoaded && `Running: ${runtimeLabel}`, awaitingProfile && 'Strata model required'].filter(Boolean).join(' · ')}
+      placement="top-start"
+      panelClassName="w-64"
+      button={<>
+        {switching ? <Spinner className="size-3 shrink-0" /> : <Icon name="bolt" className="size-3 shrink-0" />}
+        <span className="hidden sm:inline">{connected ? label : 'offline'}</span>
+        {connected && activeElsewhere && <span className="hidden md:inline">· {runtimeLabel} active</span>}
+        {connected && awaitingProfile && <Icon name="warning" className="size-3 shrink-0" />}
+        <Icon name="chevronDown" className="size-3 shrink-0" />
+      </>}
+    >
+      {(close) => <>
+        <MenuLabel>Inference engine</MenuLabel>
+        {LOCAL_ENGINES.map(({ kind, label: engineLabel }) => (
+          <MenuItem key={kind} label={engineLabel} checked={configured === kind}
+            hint={kind === 'strata' ? (hasStrataProfile ? 'Profile ready' : 'Model required') : undefined}
+            disabled={!connected || !settings || switching}
+            onSelect={() => void select(kind, close)} />
+        ))}
+        {activeElsewhere && <MenuLabel>Current model runs on {runtimeLabel}</MenuLabel>}
+        {configured === 'strata' && <p className="px-2 py-1 text-xs text-ink-500 dark:text-ink-400">
+          {hasStrataProfile ? 'For Strata, choose the model from the prepared profile.' : 'Strata is selected. Prepare a compatible model to use it.'}
+        </p>}
+        <MenuSeparator />
+        <MenuItem icon="cube" label="Manage models" onSelect={() => { close(); goTo('models') }} />
+        <MenuItem label="Engine settings" onSelect={() => { close(); goTo('settings') }} />
+      </>}
+    </PopoverButton>
   )
 }
 

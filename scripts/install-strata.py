@@ -60,7 +60,7 @@ print(M.build_engine(llama, jobs=int(sys.argv[2])))
     print(f"\nEngine ready: {root / 'build-metal/strata'}")
     print("Model weights were not downloaded. Check SSD space before preparing a pack.")
     print("Prepare a supported model: " + shlex.join([str(python), str(root / "setup.py"), "--model", "Q2_0", "--context", "8192", "--vision", "no", "--no-start"]))
-    print("In Studio Settings → Strata, select the generated strata-<model>.json.")
+    print("Select Strata in Studio to detect a single model in the default installation. For a custom installation or multiple profiles, select the generated strata-<model>.json in Settings.")
 
 
 if __name__ == "__main__":
